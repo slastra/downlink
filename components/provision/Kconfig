@@ -1,0 +1,28 @@
+menu "Provisioning portal"
+
+config PROVISION_AUTO_S
+    int "Start the portal after this long with no known network (s)"
+    default 90
+    range 0 3600
+    help
+        A station moved to a site whose SSID is not in its table would
+        otherwise sit red forever. 0 disables the automatic trigger; the
+        BOOT button and the console still work.
+
+config PROVISION_TIMEOUT_S
+    int "Close after this long with nobody on the portal (s)"
+    default 1800
+
+config PROVISION_IDLE_S
+    int "Close when a connected client has been idle this long (s)"
+    default 300
+    help
+        Association alone does not keep the portal open: a phone that
+        joined the open network and was put down would otherwise hold the
+        station off the fleet network. Only page requests count.
+
+config PROVISION_MAX_S
+    int "Hard cap on a portal session (s)"
+    default 3600
+
+endmenu

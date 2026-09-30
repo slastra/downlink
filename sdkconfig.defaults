@@ -1,0 +1,44 @@
+# Target: ESP32-S3-WROOM-1U N16R8 dev board (YD-ESP32-S3 layout), the same
+# board as tspl-station.
+CONFIG_IDF_TARGET="esp32s3"
+
+# 16 MB flash. The default 2 MB silently truncates the partition table.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 8 MB octal PSRAM. The stream ring (512 KB), the Opus pseudostack (120 KB)
+# and the decoder state live here. Allocations under 16 KB stay internal.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Opus decode reads its pseudostack out of PSRAM on every frame; the bigger
+# data cache is what micro-opus recommends for the S3.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# Console on UART0 via the board's UART bridge port, as on tspl-station.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Radio and HTTP on core 0; decode and I2S on core 1.
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
+
+# https:// stream URLs verify against the common root bundle.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# Stack high-water marks in the heartbeat.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# Empty here so the file stays safe to commit; see sdkconfig.defaults.local.
+CONFIG_NETLINK_SSID0=""
+CONFIG_NETLINK_PASS0=""

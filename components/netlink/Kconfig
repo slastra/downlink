@@ -1,0 +1,46 @@
+menu "Network link (WiFi station)"
+
+config NETLINK_SSID0
+    string "Seed WiFi SSID"
+    default ""
+    help
+        First entry of the NVS credential table, written on first boot if
+        the table is empty. Leave blank in committed defaults.
+
+config NETLINK_PASS0
+    string "Seed WiFi password"
+    default ""
+
+
+config NETLINK_MAX_CREDS
+    int "Credential table size"
+    default 8
+    range 1 16
+    help
+        How many SSID/password pairs NVS holds. Eight covers a home
+        network, a bench network and a few moves.
+
+config NETLINK_ROAM_RSSI
+    int "Roam-check threshold (dBm)"
+    default -70
+    range -95 -40
+    help
+        Below this the driver raises WIFI_EVENT_STA_BSS_RSSI_LOW and the
+        station scans for a better AP on the same SSID. Inherited from
+        relo-bridge, where beacon timeouts began around -75 dBm.
+
+config NETLINK_MAX_BACKOFF_MS
+    int "Reconnect backoff ceiling (ms)"
+    default 30000
+    range 1000 300000
+
+config NETLINK_JOIN_TIMEOUT_MS
+    int "Time allowed from associate to IP (ms)"
+    default 15000
+    range 3000 60000
+    help
+        An association that never yields an address (wrong VLAN, DHCP
+        exhausted) is a failure for that credential this cycle, so the
+        station moves to the next one instead of sitting on a dead link.
+
+endmenu

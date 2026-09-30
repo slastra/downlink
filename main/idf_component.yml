@@ -1,0 +1,5 @@
+dependencies:
+  idf: ">=6.0"
+  # Opus with an Ogg demuxer (OggOpusDecoder), Xtensa DSP paths, PSRAM-aware.
+  # Its sibling esphome/micro-mp3 is the path for MP3 mounts later.
+  esphome/micro-opus: "^0.4.1"

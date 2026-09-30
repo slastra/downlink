@@ -1,0 +1,13 @@
+# ESP32-S3-WROOM-1U N16R8: 16 MB flash.
+#
+# tspl-station's layout without the assets partition. NVS keeps the stock
+# offset (WiFi table, device id, stream URL). Two 3 MB OTA slots so OTA can
+# be added later without a repartition that would wipe NVS; until then
+# `idf.py flash` writes ota_0 and the bootloader boots it.
+#
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x8000
+otadata,    data, ota,      0x11000,   0x2000
+phy_init,   data, phy,      0x13000,   0x1000
+ota_0,      app,  ota_0,    0x20000,   0x300000
+ota_1,      app,  ota_1,    0x320000,  0x300000

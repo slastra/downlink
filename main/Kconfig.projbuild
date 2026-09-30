@@ -1,0 +1,72 @@
+menu "downlink"
+
+config DL_DEVICE_ID
+    string "Device id"
+    default "downlink"
+    help
+        DHCP hostname and the portal AP's suffix ("downlink-<id>").
+        Overridable from the portal; NVS wins over this.
+
+config DL_STREAM_URL
+    string "Stream URL"
+    default "http://icecast.example:8000/stream"
+    help
+        Icecast mount serving Ogg Opus (RUMP with codec = Opus). Seed
+        value: the portal's Stream URL field overrides it in NVS.
+
+menu "I2S (PCM5102A)"
+
+config DL_I2S_BCK_GPIO
+    int "BCK GPIO"
+    default 4
+    range 0 48
+
+config DL_I2S_WS_GPIO
+    int "LRCK / WS GPIO"
+    default 5
+    range 0 48
+
+config DL_I2S_DOUT_GPIO
+    int "DIN (data out) GPIO"
+    default 6
+    range 0 48
+
+endmenu
+
+config DL_VOLUME
+    int "Volume (0-100)"
+    default 70
+    range 0 100
+    help
+        Digital gain before the DAC. 100 is unity; each step below is
+        0.5 dB, so 70 is -15 dB and 0 is silence. The PCM5102A has no
+        hardware volume.
+
+config DL_RING_KB
+    int "Stream ring buffer (KB, PSRAM)"
+    default 512
+    range 64 4096
+    help
+        Compressed bytes between the network and the decoder. 512 KB is
+        about 30 s of 128 kbps Opus: it absorbs Icecast's connect burst
+        and rides out a short WiFi drop.
+
+config DL_PREBUFFER_KB
+    int "Prebuffer before playback (KB)"
+    default 32
+    range 4 1024
+    help
+        Playback starts (and restarts after an underrun) once the ring
+        holds this much. 32 KB is 2 s at 128 kbps.
+
+config DL_STALL_S
+    int "Reconnect when no stream data for (s)"
+    default 10
+    range 3 120
+
+config DL_MAX_BACKOFF_S
+    int "Stream reconnect backoff ceiling (s)"
+    default 30
+    range 2 600
+
+endmenu

@@ -1,0 +1,10 @@
+# Copy to sdkconfig.defaults.local and fill in. That file is gitignored, and
+# the top-level CMakeLists.txt picks it up automatically when present.
+
+# Seed WiFi. Written to the NVS credential table on first boot only; after
+# that NVS is the truth and the captive portal (hold BOOT 3 s) manages it.
+CONFIG_NETLINK_SSID0=""
+CONFIG_NETLINK_PASS0=""
+
+# Stream. Also a seed: the portal's "Stream URL" field overrides it in NVS.
+CONFIG_DL_STREAM_URL="http://icecast.example:8000/stream"
