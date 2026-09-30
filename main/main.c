@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "led.h"
 #include "netlink.h"
 #include "player.h"
 #include "provision.h"
@@ -31,6 +32,36 @@ static const char *TAG = "main";
 
 #define BOOT_GPIO       0
 #define HEARTBEAT_S     30
+#define TICK_MS         250
+
+/* The first state that applies wins; the LED only changes on a transition. */
+enum { ST_PORTAL_CLIENT, ST_PORTAL, ST_NO_WIFI, ST_WRONG_CODEC, ST_CONNECTING, ST_BUFFERING, ST_PLAYING };
+
+static int current_status(void)
+{
+    if (provision_active())      return provision_clients() > 0 ? ST_PORTAL_CLIENT : ST_PORTAL;
+    if (!netlink_is_up())        return ST_NO_WIFI;
+    if (stream_codec_rejected()) return ST_WRONG_CODEC;
+    if (!stream_connected())     return ST_CONNECTING;
+    return player_state() == PLAYER_PLAYING ? ST_PLAYING : ST_BUFFERING;
+}
+
+static void update_led(void)
+{
+    static int shown = -1;
+    int st = current_status();
+    if (st == shown) return;
+    shown = st;
+    switch (st) {
+    case ST_PORTAL_CLIENT: LED_PROVISION_CLIENT(); break;
+    case ST_PORTAL:        LED_PROVISION();        break;
+    case ST_NO_WIFI:       LED_NO_WIFI();          break;
+    case ST_WRONG_CODEC:   LED_WRONG_CODEC();      break;
+    case ST_CONNECTING:    LED_CONNECTING();       break;
+    case ST_BUFFERING:     LED_BUFFERING();        break;
+    case ST_PLAYING:       LED_PLAYING();          break;
+    }
+}
 
 static void on_net_up(void)   { stream_set_link(true); }
 static void on_net_down(void) { stream_set_link(false); }
@@ -79,6 +110,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
     settings_load();
+    led_init();
     ESP_LOGI(TAG, "downlink %s -> %s", settings_id(), settings_url());
 
     stream_start(settings_url());
@@ -94,9 +126,11 @@ void app_main(void)
 
     char line[200];
     for (int tick = 1;; tick++) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+        update_led();
+        if (tick % (1000 / TICK_MS)) continue;
         provision_poll();
-        if (tick % HEARTBEAT_S) continue;
+        if (tick % (HEARTBEAT_S * 1000 / TICK_MS)) continue;
         netlink_status(line, sizeof line);
         ESP_LOGI(TAG, "%s", line);
         stream_status(line, sizeof line);

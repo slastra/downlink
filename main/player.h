@@ -13,7 +13,10 @@
 extern "C" {
 #endif
 
+typedef enum { PLAYER_BUFFERING, PLAYER_PLAYING, PLAYER_SKIPPING } player_state_t;
+
 void player_start(int volume_percent);
+player_state_t player_state(void);
 void player_status(char *out, size_t len);
 
 #ifdef __cplusplus

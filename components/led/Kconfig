@@ -1,0 +1,32 @@
+menu "Status LED"
+
+config DL_LED_GPIO
+    int "WS2812 data GPIO"
+    default 48
+    range 0 48
+    help
+        The YD-ESP32-S3 / DevKitC-1 layout puts the onboard pixel on GPIO48.
+        Some clone revisions ship with the RGB solder jumper open; if the
+        LED stays dark on a fresh board, bridge it before suspecting code.
+
+choice DL_LED_ORDER
+    prompt "WS2812 colour order"
+    default DL_LED_ORDER_GRB
+
+config DL_LED_ORDER_GRB
+    bool "GRB (ordinary WS2812B, most clone boards)"
+
+config DL_LED_ORDER_RGB
+    bool "RGB (Espressif DevKitC-1 onboard pixel)"
+
+endchoice
+
+config DL_LED_BRIGHTNESS
+    int "Brightness (%)"
+    default 15
+    range 1 100
+    help
+        The SuperMini's pixel sits bare on the board and is glaring at
+        full drive; 15% reads clearly across a room.
+
+endmenu

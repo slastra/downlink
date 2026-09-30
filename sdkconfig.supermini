@@ -1,0 +1,25 @@
+# Variant: the ESP32-S3 SuperMini (ESP32-S3FH4R2: 4 MB flash, 2 MB QUAD
+# PSRAM, one USB-C on the native port, WS2812 on GPIO48). I2S moves to
+# GPIO9 (BCK) / 11 (LCK) / 10 (DIN), on the same edge as 5V/GND/3V3.
+#
+#   idf.py -B build-supermini -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.supermini" build
+#
+# 2 MB PSRAM holds the 512 KB ring, the 120 KB Opus pseudostack and the
+# WiFi/lwIP buffers with room to spare.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=n
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-4mb.csv"
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_MODE_OCT=n
+# The only port is native USB, so the console moves to USB-Serial/JTAG.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+
+# I2S on the 5V/GND/3V3 side of the board, so the DAC wires to one edge.
+CONFIG_DL_I2S_BCK_GPIO=9
+CONFIG_DL_I2S_WS_GPIO=11
+CONFIG_DL_I2S_DOUT_GPIO=10
+
+# The SuperMini's onboard pixel takes RGB order, like tspl-station's variant.
+CONFIG_DL_LED_ORDER_RGB=y
+CONFIG_DL_LED_ORDER_GRB=n

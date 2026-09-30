@@ -36,6 +36,10 @@ void stream_boundary_pop(void);
  * decoder cannot resynchronise on its own). */
 void stream_reconnect(const char *why);
 
+/* For the status LED. */
+bool stream_connected(void);
+bool stream_codec_rejected(void);   /* last connection was Ogg but not Opus */
+
 /* One line for the heartbeat. */
 void stream_status(char *out, size_t len);
 

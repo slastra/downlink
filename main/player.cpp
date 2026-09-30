@@ -22,10 +22,12 @@ static const char *TAG = "player";
 #define PREBUFFER    (CONFIG_DL_PREBUFFER_KB * 1024)
 #define SILENT_US    (10LL * 1000 * 1000)       /* data flowing, nothing decoded: reconnect */
 
-enum play_state { BUFFERING, PLAYING, SKIPPING };
+#define BUFFERING PLAYER_BUFFERING
+#define PLAYING   PLAYER_PLAYING
+#define SKIPPING  PLAYER_SKIPPING
 static const char *const STATE_NAMES[] = { "buffering", "playing", "skipping" };
 
-static volatile play_state s_state = BUFFERING;
+static volatile player_state_t s_state = BUFFERING;
 static int32_t  s_gain_q15;
 static uint32_t s_underruns, s_resets, s_errors;
 
@@ -160,6 +162,8 @@ extern "C" void player_start(int volume_percent)
      * task stack itself stays small. */
     xTaskCreatePinnedToCore(player_task, "player", 8192, NULL, 7, NULL, 1);
 }
+
+extern "C" player_state_t player_state(void) { return s_state; }
 
 extern "C" void player_status(char *out, size_t len)
 {

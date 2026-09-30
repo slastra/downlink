@@ -55,7 +55,7 @@ done:
     if (s->on_tags) s->on_tags(vendor, title, artist, s->ctx);
 }
 
-void ogg_sniff_feed(ogg_sniff_t *s, const uint8_t *p, size_t n, uint64_t offset)
+void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset)
 {
     static const uint8_t magic[4] = { 'O', 'g', 'g', 'S' };
     for (size_t i = 0; i < n; ) {
@@ -74,6 +74,13 @@ void ogg_sniff_feed(ogg_sniff_t *s, const uint8_t *p, size_t n, uint64_t offset)
             break;
 
         case ST_HDR:
+            /* Bytes 18..21 are the page sequence number. The flags (byte 5)
+             * are already in, so a BOS page restarts the count at 0. */
+            if (s->hlen >= 18 && s->hlen < 22) {
+                if (s->hlen == 18 && (s->hdr[5] & 0x02)) s->seq_next = 0;
+                p[i] = (uint8_t)(s->seq_next >> (8 * (s->hlen - 18)));
+                if (s->hlen == 21) s->seq_next++;
+            }
             s->hdr[s->hlen++] = p[i++];
             if (s->hlen == 27) {
                 if (s->hdr[4] != 0) { ogg_sniff_reset(s); break; }   /* version */

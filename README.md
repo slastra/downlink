@@ -52,7 +52,31 @@ All three I2S GPIOs can be changed in menuconfig. Stay off these pins:
 - 43, 44 (UART0 console)
 - 48 (WS2812)
 
-### USB ports
+### ESP32-S3 SuperMini
+
+The SuperMini (ESP32-S3FH4R2: 4 MB flash, 2 MB quad PSRAM, one USB-C) works
+too. Its variant puts I2S on the edge with the power pins, so the DAC wires to
+one side:
+
+| PCM5102A | SuperMini |
+|---|---|
+| `VIN` / `GND` | `5V` / `GND` |
+| `BCK` | **GPIO9** |
+| `LCK` | **GPIO11** |
+| `DIN` | **GPIO10** |
+
+`SCK`, `FMT`, `XSMT` and the rest are set as in the table above. Build and flash:
+
+```sh
+idf.py -B build-supermini -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.supermini" \
+       -D SDKCONFIG=build-supermini/sdkconfig -p /dev/ttyACM0 build flash monitor
+```
+
+Its only port is native USB, so the console is USB-Serial/JTAG
+(`/dev/ttyACM0`). If flashing can't connect, hold BOOT, tap RST, and release
+BOOT.
+
+### USB ports (N16R8)
 
 Flash and monitor through the **UART bridge** port (`UART`/`COM`,
 `/dev/ttyUSB0` or `ttyACM0` depending on the bridge chip). The console is on
@@ -130,6 +154,11 @@ Under *Advanced* are the priority and device id. Saving reboots the board.
   is back. A dead or stalled connection retries with backoff from 1 s up to
   30 s, and resets to 1 s after a connection that lasted 30 s. The ring
   keeps playing through short gaps.
+- **Joining mid-stream.** Icecast sends a new listener the stored header
+  pages (sequence 0, 1) and then live pages (sequence 625, …).
+  micro-ogg-demuxer rejects that gap outright, so the page walker renumbers
+  sequences as bytes arrive. The CRC is left stale, since the decoder runs
+  with CRC checks off.
 - **Stream restarts.** Every new connection, and every Ogg BOS page within
   one (a chained stream, as when the source restarts), is recorded as a
   byte offset. The player resets the decoder exactly there, so a reconnect
@@ -142,6 +171,20 @@ Under *Advanced* are the priority and device id. Saving reboots the board.
   update when a new chain starts. The request still sends `Icy-MetaData: 1`,
   and if a server answers with `icy-metaint` (MP3 mounts), the blocks are
   stripped and `StreamTitle` is logged.
+
+### Status LED
+
+The onboard WS2812 (GPIO48 on both boards) shows the first state that
+applies. Brightness is `DL_LED_BRIGHTNESS` (15%).
+
+| LED | State |
+|---|---|
+| magenta pulse / solid | portal open / a phone is on it |
+| red | no WiFi |
+| slow red pulse | the mount isn't Opus (switch RUMP's codec) |
+| yellow pulse | WiFi up, stream not connected (retrying) |
+| blue | connected, buffering |
+| green | playing |
 
 ### Serial log
 
@@ -173,7 +216,6 @@ The last three lines are a heartbeat every 30 s.
 ## Not yet
 
 - MP3 via `esphome/micro-mp3`, with the decoder chosen by `Content-Type`.
-- A status LED on the WS2812 (GPIO48), like tspl-station's.
 - Volume at runtime (portal or console) instead of only at build time.
 - OTA (the partition table already has the slots).
 - Clock drift between the source and the DAC is absorbed by the ring, not

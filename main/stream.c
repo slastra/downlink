@@ -149,7 +149,7 @@ static void parse_icy(const char *m)
 /* Blocks while the ring is full (that is the backpressure that keeps a
  * faster-than-realtime connect burst from running away). Gives up if a
  * reconnect is requested or the link drops. */
-static bool ring_write(const uint8_t *p, size_t n)
+static bool ring_write(uint8_t *p, size_t n)
 {
     ogg_sniff_feed(&s_sniff, p, n, s_written);
     if (s_wrong_codec) return false;
@@ -163,7 +163,7 @@ static bool ring_write(const uint8_t *p, size_t n)
     return true;
 }
 
-static bool feed(const uint8_t *buf, size_t n)
+static bool feed(uint8_t *buf, size_t n)
 {
     if (!s_metaint) return ring_write(buf, n);
     for (size_t i = 0; i < n; ) {
@@ -344,6 +344,9 @@ void stream_start(const char *url)
     /* Core 0 with the WiFi driver; decode owns core 1. */
     xTaskCreatePinnedToCore(net_task, "stream", 6144, NULL, 6, NULL, 0);
 }
+
+bool stream_connected(void)      { return s_connected; }
+bool stream_codec_rejected(void) { return s_wrong_codec; }
 
 void stream_status(char *out, size_t len)
 {
