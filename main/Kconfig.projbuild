@@ -4,15 +4,24 @@ config DL_DEVICE_ID
     string "Device id"
     default "downlink"
     help
-        DHCP hostname and the portal AP's suffix ("downlink-<id>").
+        DHCP hostname, the portal AP's suffix ("downlink-<id>") and the MQTT
+        topic segment (downlink/<id>/...). Give each board its own.
         Overridable from the portal; NVS wins over this.
+
+config DL_BOARD
+    string "Board name"
+    default "n16r8"
+    help
+        Reported in the MQTT status, and how OTA will pick the right image
+        for this board.
 
 config DL_STREAM_URL
     string "Stream URL"
     default "http://icecast.example:8000/stream"
     help
-        Icecast mount serving Ogg Opus (RUMP with codec = Opus). Seed
-        value: the portal's Stream URL field overrides it in NVS.
+        Icecast mount serving Ogg Opus (RUMP with codec = Opus). A seed:
+        copied to NVS on first boot (unless it is the placeholder), then
+        changed by the portal or the MQTT "url" command.
 
 menu "I2S (PCM5102A)"
 
@@ -40,7 +49,8 @@ config DL_VOLUME
     help
         Digital gain before the DAC. 100 is unity; each step below is
         0.5 dB, so 70 is -15 dB and 0 is silence. The PCM5102A has no
-        hardware volume.
+        hardware volume. A default: the MQTT "volume" command changes it
+        live and saves it to NVS, which wins from then on.
 
 config DL_RING_KB
     int "Stream ring buffer (KB, PSRAM)"
@@ -51,13 +61,34 @@ config DL_RING_KB
         about 30 s of 128 kbps Opus: it absorbs Icecast's connect burst
         and rides out a short WiFi drop.
 
-config DL_PREBUFFER_KB
-    int "Prebuffer before playback (KB)"
-    default 32
-    range 4 1024
+config DL_PREBUFFER_MS
+    int "Prebuffer before playback (ms of audio)"
+    default 2000
+    range 250 30000
     help
-        Playback starts (and restarts after an underrun) once the ring
-        holds this much. 32 KB is 2 s at 128 kbps.
+        Playback starts (and restarts after an underrun) once this much
+        audio is buffered. Measured in audio from the Ogg granule
+        positions, not bytes: Opus is variable-bitrate, and a quiet passage
+        is ~40x smaller than a loud one.
+
+config DL_BUFFER_MS
+    int "Buffer depth to hold (ms of audio)"
+    default 4000
+    range 500 60000
+    help
+        The depth the drift correction holds against the difference between
+        the source's clock and this board's. Icecast's connect burst usually
+        lands near this on its own; deeper rides out longer network
+        stalls, shallower is closer to live.
+
+config DL_BUFFER_MAX_MS
+    int "Catch up above (ms of audio)"
+    default 12000
+    range 2000 300000
+    help
+        Above this depth the player decodes and discards until it is back
+        at DL_BUFFER_MS. Joining an Icecast mount during a silent passage
+        can hand over minutes of audio in one byte-sized burst.
 
 config DL_STALL_S
     int "Reconnect when no stream data for (s)"

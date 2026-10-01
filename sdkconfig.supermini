@@ -23,3 +23,5 @@ CONFIG_DL_I2S_DOUT_GPIO=10
 # The SuperMini's onboard pixel takes RGB order, like tspl-station's variant.
 CONFIG_DL_LED_ORDER_RGB=y
 CONFIG_DL_LED_ORDER_GRB=n
+
+CONFIG_DL_BOARD="supermini"

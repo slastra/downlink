@@ -33,9 +33,10 @@ bool netlink_is_up(void);
 
 /* Fields for the status payload (docs/spec.md §3.3). ssid is "" when down. */
 typedef struct {
-    char ssid[33];
-    int  rssi;
-    char ip[16];
+    char     ssid[33];
+    int      rssi;
+    char     ip[16];
+    uint32_t drops, roams;
 } netlink_info_t;
 void netlink_get_info(netlink_info_t *out);
 
@@ -60,7 +61,9 @@ typedef struct {
     uint8_t prio;       /* higher wins */
 } netlink_cred_t;
 
-/* Add or replace (by SSID). Persists. Kicks a rejoin if currently down. */
+/* Add or replace (by SSID). Persists. Kicks a rejoin if currently down.
+ * pass == NULL keeps the stored password of a known SSID (and means an
+ * open network for a new one). */
 bool netlink_cred_add(const char *ssid, const char *pass, uint8_t prio);
 bool netlink_cred_remove(const char *ssid);
 /* Copies up to `cap` entries; passwords are blanked. Returns the count. */

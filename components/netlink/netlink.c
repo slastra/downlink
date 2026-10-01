@@ -563,6 +563,8 @@ int netlink_scan(netlink_scan_entry_t *out, int cap)
 void netlink_get_info(netlink_info_t *out)
 {
     memset(out, 0, sizeof *out);
+    out->drops = s_drops;
+    out->roams = s_roams;
     if (!s_enabled || !s_up) return;
     wifi_ap_record_t ap;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
@@ -597,12 +599,14 @@ bool netlink_cred_add(const char *ssid, const char *pass, uint8_t prio)
     if (!s_cred_lock) s_cred_lock = xSemaphoreCreateMutex();
     xSemaphoreTake(s_cred_lock, portMAX_DELAY);
     int i = cred_find(ssid);
-    if (i < 0) {
+    bool is_new = i < 0;
+    if (is_new) {
         if (s_ncreds >= MAX_CREDS) { xSemaphoreGive(s_cred_lock); return false; }
         i = s_ncreds++;
+        s_creds[i].pass[0] = 0;
     }
     strlcpy(s_creds[i].ssid, ssid, sizeof s_creds[i].ssid);
-    strlcpy(s_creds[i].pass, pass ? pass : "", sizeof s_creds[i].pass);
+    if (pass) strlcpy(s_creds[i].pass, pass, sizeof s_creds[i].pass);
     s_creds[i].prio = prio;
     bool ok = creds_save();
     xSemaphoreGive(s_cred_lock);

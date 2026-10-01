@@ -2,6 +2,7 @@ build*/
 sdkconfig
 sdkconfig.old
 managed_components/
-dependencies.lock
 sdkconfig.defaults.local
 *.log
+test/host/test_ogg_sniff
+test/host/test_drift

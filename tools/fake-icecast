@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""
+fake-icecast -- serve an Ogg Opus file the way Icecast serves a live mount.
+
+A bench stand-in for a real source that reproduces what matters to a
+listener: a "live" position that advances in real time from server start;
+each new listener gets the stored header pages (sequence 0, 1), then a
+byte-sized burst ending at the live position (Icecast's burst-size, so a
+quiet passage hands over far more audio than a loud one, and the page
+sequence jumps), then pages paced in real time by their granules.
+
+  tools/fake-icecast programme.opus                   # http://<this host>:8765/stream
+  tools/fake-icecast programme.opus --drop-at 450     # cut the listener once at t=450 s
+
+A loud/silent test programme (VBR swings ~20x):
+
+  ffmpeg -f lavfi -i "anoisesrc=color=pink:amplitude=0.3:duration=60" ... -c:a libopus -b:a 128k
+"""
+import argparse
+import http.server
+import socketserver
+import sys
+import threading
+import time
+
+
+def ogg_pages(data):
+    """[(bytes, granule)] for every page in the file."""
+    out, i = [], 0
+    while i < len(data):
+        if data[i:i + 4] != b"OggS":
+            sys.exit(f"not an Ogg page at byte {i}")
+        segs = data[i + 26]
+        size = 27 + segs + sum(data[i + 27:i + 27 + segs])
+        granule = int.from_bytes(data[i + 6:i + 14], "little", signed=True)
+        out.append((data[i:i + size], granule))
+        i += size
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("file")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--burst", type=int, default=65536, help="burst size in bytes (Icecast's default)")
+    ap.add_argument("--drop-at", type=float, help="close the listener once, at this many seconds")
+    args = ap.parse_args()
+
+    pages = ogg_pages(open(args.file, "rb").read())
+    headers, audio = pages[:2], pages[2:]
+    if not headers[0][0][28:36] == b"OpusHead":
+        sys.exit("first page is not OpusHead")
+    pre_skip = int.from_bytes(headers[0][0][38:40], "little")
+    end_s = [(g - pre_skip) / 48000 for _, g in audio]   # when each page's audio has "happened"
+    start = time.monotonic()
+    dropped = threading.Event()
+
+    def live_index():
+        now = time.monotonic() - start
+        i = 0
+        while i < len(audio) and end_s[i] <= now:
+            i += 1
+        return i   # pages [0, i) are in the past
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
+
+        def log_message(self, fmt, *a):
+            print(f"[{time.monotonic() - start:7.1f}] {self.client_address[0]} " + fmt % a, flush=True)
+
+        def do_GET(self):
+            if self.path != "/stream":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/ogg")
+            self.send_header("icy-name", "fake-icecast")
+            self.end_headers()
+            live = live_index()
+            first, size = live, 0
+            while first > 0 and size + len(audio[first - 1][0]) <= args.burst:
+                size += len(audio[first - 1][0])
+                first -= 1
+            self.log_message("join at t=%.1f s: burst of %d pages, %d bytes, %.1f s of audio",
+                             time.monotonic() - start, live - first, size,
+                             (end_s[live - 1] - end_s[first]) if live > first else 0)
+            try:
+                for p, _ in headers:
+                    self.wfile.write(p)
+                for p, _ in audio[first:live]:
+                    self.wfile.write(p)
+                self.wfile.flush()
+                i = live
+                while i < len(audio):
+                    if args.drop_at and not dropped.is_set() and time.monotonic() - start >= args.drop_at:
+                        dropped.set()
+                        self.log_message("dropping listener (--drop-at)")
+                        return
+                    wait = end_s[i] - (time.monotonic() - start)
+                    if wait > 0:
+                        time.sleep(min(wait, 0.2))
+                        continue
+                    self.wfile.write(audio[i][0])
+                    self.wfile.flush()
+                    i += 1
+                self.log_message("end of programme")
+            except (BrokenPipeError, ConnectionResetError):
+                self.log_message("listener left")
+
+    class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    print(f"{len(audio)} audio pages, {end_s[-1]:.0f} s; http://0.0.0.0:{args.port}/stream", flush=True)
+    Server(("", args.port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

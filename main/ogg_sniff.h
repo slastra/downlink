@@ -7,7 +7,9 @@
  *    stream when the source restarts or retags);
  *  - pull TITLE / ARTIST out of OpusTags, since Icecast does not interleave
  *    ICY metadata into Ogg streams -- the tags are the metadata;
- *  - renumber page sequence numbers in place. A listener joining mid-stream
+ *  - report every page's granule position (on_page), which is how downlink
+ *    measures its buffer in time rather than bytes;
+ *  - renumber page sequence numbers in place (opt-in). A listener joining mid-stream
  *    gets Icecast's stored header pages (seq 0, 1) followed by live pages
  *    (seq 625...), and micro-ogg-demuxer treats that gap as a fatal error
  *    where libogg would note a hole and carry on. The CRC is left stale;
@@ -22,6 +24,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define OGG_SNIFF_CAP 2048
 
 typedef struct {
@@ -30,7 +36,11 @@ typedef struct {
     /* First 8 bytes of a BOS page's body: the codec's header magic
      * ("OpusHead", "\x01vorbis", ...). */
     void (*on_codec)(const uint8_t magic[8], void *ctx);
+    /* Every page, as its header completes. `granule` is the page's granule
+     * position (samples at 48 kHz for Opus), -1 when no packet ends on it. */
+    void (*on_page)(uint64_t page_offset, uint32_t serial, int64_t granule, uint8_t flags, void *ctx);
     void *ctx;
+    bool renumber;    /* rewrite page sequence numbers (see above) */
 
     /* private */
     int      state;
@@ -45,6 +55,10 @@ typedef struct {
 } ogg_sniff_t;
 
 void ogg_sniff_reset(ogg_sniff_t *s);
-/* `offset` is the absolute stream offset of p[0]. Rewrites page sequence
- * bytes in p. */
+/* `offset` is the absolute stream offset of p[0]. With `renumber`, rewrites
+ * page sequence bytes in p. */
 void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset);
+
+#ifdef __cplusplus
+}
+#endif

@@ -29,8 +29,29 @@ void stream_start(const char *url);
 void stream_set_link(bool up);
 
 StreamBufferHandle_t stream_ring(void);
-bool stream_boundary_peek(uint64_t *offset);
+
+/* A point where the decoder must start over, and the connection ("epoch",
+ * counting from 1) whose data follows it. */
+typedef struct {
+    uint64_t offset;
+    uint32_t epoch;
+} stream_boundary_t;
+bool stream_boundary_peek(stream_boundary_t *b);
 void stream_boundary_pop(void);
+
+/*
+ * The newest audio page written to the ring, by its granule position
+ * (samples at 48 kHz). The player knows the granule of the page it is
+ * decoding; in the same epoch and serial, the difference is the audio
+ * buffered, exactly, whatever the bitrate. `first` is the first audio
+ * granule of this serial in this connection.
+ */
+typedef struct {
+    uint32_t epoch, serial;
+    int64_t  granule, first;
+    bool     valid;
+} stream_pos_t;
+void stream_write_pos(stream_pos_t *out);
 
 /* Drop the connection and start over (the player calls this when the
  * decoder cannot resynchronise on its own). */
@@ -39,6 +60,25 @@ void stream_reconnect(const char *why);
 /* For the status LED. */
 bool stream_connected(void);
 bool stream_codec_rejected(void);   /* last connection was Ogg but not Opus */
+
+/* Bumped whenever lastError changes, so a watcher can publish promptly. */
+uint32_t stream_error_seq(void);
+
+/* Switch to another URL: takes effect on a fresh connection, now. */
+void stream_set_url(const char *url);
+
+typedef struct {
+    bool     connected;
+    bool     codec_rejected;
+    unsigned kbps;             /* incoming, averaged over ~5 s */
+    uint32_t connects, drops;
+    int      last_http;        /* status of the last attempt, 0 = no response */
+    size_t   ring_used, ring_size;
+    char     url[256];
+    char     title[160];
+    char     last_error[96];   /* "" while streaming */
+} stream_stats_t;
+void stream_get_stats(stream_stats_t *out);
 
 /* One line for the heartbeat. */
 void stream_status(char *out, size_t len);

@@ -30,6 +30,7 @@ static httpd_handle_t     s_httpd;
 static esp_timer_handle_t s_timeout;
 static int64_t            s_started_us;
 static int64_t            s_last_http_us;   /* last request served: the idle clock */
+static int64_t            s_closed_us;      /* when the portal last closed */
 
 #define SCAN_MAX 24
 static netlink_scan_entry_t s_scan[SCAN_MAX];
@@ -185,8 +186,10 @@ static esp_err_t save_post(httpd_req_t *req)
     if (prio < 0) prio = 0;
     if (prio > 255) prio = 255;
 
-    /* Never log the password; the ssid/prio/id line is all anyone needs. */
-    bool ok = netlink_cred_add(ssid, pass, (uint8_t)prio);
+    /* Never log the password; the ssid/prio/id line is all anyone needs.
+     * A blank password means "keep what is stored": someone changing only
+     * the stream URL must not wipe the PSK of the network they re-picked. */
+    bool ok = netlink_cred_add(ssid, pass[0] ? pass : NULL, (uint8_t)prio);
     ESP_LOGI(TAG, "save: ssid=\"%s\" prio=%d id=\"%s\" -> %s", ssid, prio, id, ok ? "stored" : "REJECTED");
     /* The app owns its settings; pass along only what changed. */
     if (ok && s_save_cb) {
@@ -331,6 +334,7 @@ void provision_stop(void)
      * events esp_wifi_stop raises, see a portal that is already closed. */
     if (!s_active) return;
     s_active = false;
+    s_closed_us = esp_timer_get_time();
     esp_timer_stop(s_timeout);
     dns_hijack_stop();
     if (s_httpd) { httpd_stop(s_httpd); s_httpd = NULL; }
@@ -346,7 +350,14 @@ void provision_poll(void)
 {
 #if CONFIG_PROVISION_AUTO_S > 0
     if (s_active || netlink_is_up()) return;
-    int64_t idle = (esp_timer_get_time() - netlink_last_known_seen_us()) / 1000000;
+    /* Measured from the later of "last saw a known network" and "portal
+     * closed". Without the second, the clock is already past the limit when
+     * the portal times out, so it reopened within a second -- before netlink
+     * had finished one scan -- and a board whose router had rebooted stayed
+     * in the portal until someone power-cycled it. */
+    int64_t since = netlink_last_known_seen_us();
+    if (s_closed_us > since) since = s_closed_us;
+    int64_t idle = (esp_timer_get_time() - since) / 1000000;
     if (idle >= CONFIG_PROVISION_AUTO_S) {
         ESP_LOGW(TAG, "no known network for %llds", idle);
         provision_start();

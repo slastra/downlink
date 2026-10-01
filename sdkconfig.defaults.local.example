@@ -8,3 +8,9 @@ CONFIG_NETLINK_PASS0=""
 
 # Stream. Also a seed: the portal's "Stream URL" field overrides it in NVS.
 CONFIG_DL_STREAM_URL="http://icecast.example:8000/stream"
+
+# MQTT broker for remote health and commands. Also a seed (NVS "mqtt").
+# Empty leaves MQTT off.
+CONFIG_UPLINK_URI="mqtt://broker.example:1883"
+CONFIG_UPLINK_USER=""
+CONFIG_UPLINK_PASS=""

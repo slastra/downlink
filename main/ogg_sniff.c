@@ -76,7 +76,7 @@ void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset)
         case ST_HDR:
             /* Bytes 18..21 are the page sequence number. The flags (byte 5)
              * are already in, so a BOS page restarts the count at 0. */
-            if (s->hlen >= 18 && s->hlen < 22) {
+            if (s->renumber && s->hlen >= 18 && s->hlen < 22) {
                 if (s->hlen == 18 && (s->hdr[5] & 0x02)) s->seq_next = 0;
                 p[i] = (uint8_t)(s->seq_next >> (8 * (s->hlen - 18)));
                 if (s->hlen == 21) s->seq_next++;
@@ -131,6 +131,11 @@ void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset)
             size_t body = 0;
             for (int k = 0; k < s->hdr[26]; k++) body += s->hdr[27 + k];
             if ((s->hdr[5] & 0x02) && s->on_bos) s->on_bos(s->page_start, s->ctx);
+            if (s->on_page) {
+                uint64_t g = 0;
+                for (int k = 7; k >= 0; k--) g = (g << 8) | s->hdr[6 + k];
+                s->on_page(s->page_start, le32(s->hdr + 14), (int64_t)g, s->hdr[5], s->ctx);
+            }
             s->body_left = body;
             s->body_seen = 0;
             s->cap_len = 0;

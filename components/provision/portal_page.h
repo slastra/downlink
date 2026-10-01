@@ -57,7 +57,7 @@ static const char PORTAL_TAIL[] =
 "</div>\n"
 "<div class=card>\n"
 " <label class=f id=o hidden><span>Network name</span><input type=text name=ssid2 autocomplete=off autocapitalize=off></label>\n"
-" <label class=f><span>Password</span><input type=password name=pass id=p autocomplete=off></label>\n"
+" <label class=f><span>Password (blank keeps a saved one)</span><input type=password name=pass id=p autocomplete=off></label>\n"
 " <label class=chk><input type=checkbox onchange=\"p.type=this.checked?'text':'password'\">Show password</label>\n"
 " <label class=f><span>Stream URL (Ogg Opus)</span><input type=text name=url value=\"%s\" autocomplete=off autocapitalize=off spellcheck=false></label>\n"
 " <details><summary>Advanced</summary>\n"

@@ -36,9 +36,29 @@ CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 
-# Stack high-water marks in the heartbeat.
+# MQTT 5: the will delay hides WiFi roams from the retained status topic.
+CONFIG_MQTT_PROTOCOL_5=y
+
+# Unattended portal: 5 min instead of tspl-station's 30. At a remote site
+# "no known network" is far more often a rebooting router than a person with
+# a phone; while the portal is up the board is not rejoining. BOOT still
+# opens it on demand, and someone on it keeps it open.
+CONFIG_PROVISION_TIMEOUT_S=300
+
+# Stack high-water marks in the heartbeat and the MQTT status.
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# The main task builds the MQTT status JSON; the 3.5 KB default is tight.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# Unattended: a CPU starved for 5 s (idle task not running) is a hang, so
+# panic and reboot rather than print a warning nobody reads. The reset
+# reason ("task_wdt") lands in the retained status.
+CONFIG_ESP_TASK_WDT_PANIC=y
 
 # Empty here so the file stays safe to commit; see sdkconfig.defaults.local.
 CONFIG_NETLINK_SSID0=""
 CONFIG_NETLINK_PASS0=""
+CONFIG_UPLINK_URI=""
+CONFIG_UPLINK_USER=""
+CONFIG_UPLINK_PASS=""

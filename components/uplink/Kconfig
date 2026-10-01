@@ -1,0 +1,45 @@
+menu "Uplink (MQTT)"
+
+config UPLINK_URI
+    string "MQTT broker URI (seed)"
+    default ""
+    help
+        mqtt://host:port. Like the WiFi seed, copied into NVS ("mqtt") on
+        first boot; after that NVS is the truth, so release images built
+        without credentials keep the ones a board already has. Empty with
+        nothing in NVS leaves MQTT off.
+
+config UPLINK_USER
+    string "MQTT username (seed)"
+    default ""
+
+config UPLINK_PASS
+    string "MQTT password (seed)"
+    default ""
+
+config UPLINK_TOPIC_ROOT
+    string "Topic root"
+    default "downlink"
+    help
+        Topics are <root>/<device id>/status (retained), .../cmd and
+        .../cmd/result.
+
+config UPLINK_QUEUE_DEPTH
+    int "Outbound publish queue depth"
+    default 8
+
+config UPLINK_WILL_DELAY_S
+    int "Will delay (s)"
+    default 5
+    help
+        MQTT 5 will delay: a WiFi roam shorter than this never shows as
+        offline on the retained status topic.
+
+config UPLINK_CONNECT_TIMEOUT_S
+    int "Broker connect watchdog (s)"
+    default 30
+    help
+        Past this without a broker (with an IP) the client is forced to
+        reconnect instead of sitting quietly offline.
+
+endmenu
