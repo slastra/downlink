@@ -12,8 +12,6 @@ extern "C" {
 #endif
 
 void audio_out_init(uint32_t sample_rate);
-/* Reclocks only when the rate actually changes. */
-void audio_out_set_rate(uint32_t sample_rate);
 /* Interleaved L/R frames. Blocks until the DMA has room. */
 void audio_out_write(const int16_t *frames, size_t nframes);
 

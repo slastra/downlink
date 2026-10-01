@@ -7,7 +7,6 @@
 static const char *TAG = "audio_out";
 
 static i2s_chan_handle_t s_tx;
-static uint32_t          s_rate;
 
 void audio_out_init(uint32_t sample_rate)
 {
@@ -37,20 +36,8 @@ void audio_out_init(uint32_t sample_rate)
     sc.slot_cfg.ws_width = 32;
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_tx, &sc));
     ESP_ERROR_CHECK(i2s_channel_enable(s_tx));
-    s_rate = sample_rate;
     ESP_LOGI(TAG, "I2S up: %lu Hz, BCK=%d WS=%d DOUT=%d", (unsigned long)sample_rate,
              CONFIG_DL_I2S_BCK_GPIO, CONFIG_DL_I2S_WS_GPIO, CONFIG_DL_I2S_DOUT_GPIO);
-}
-
-void audio_out_set_rate(uint32_t sample_rate)
-{
-    if (sample_rate == s_rate || sample_rate == 0) return;
-    i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
-    ESP_ERROR_CHECK(i2s_channel_disable(s_tx));
-    ESP_ERROR_CHECK(i2s_channel_reconfig_std_clock(s_tx, &clk));
-    ESP_ERROR_CHECK(i2s_channel_enable(s_tx));
-    ESP_LOGI(TAG, "rate %lu -> %lu Hz", (unsigned long)s_rate, (unsigned long)sample_rate);
-    s_rate = sample_rate;
 }
 
 void audio_out_write(const int16_t *frames, size_t nframes)

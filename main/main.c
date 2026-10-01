@@ -128,6 +128,9 @@ static void publish_health(int st)
     cJSON_AddNumberToObject(j, "playedS", ps.played_s);
     cJSON_AddNumberToObject(j, "volume", ps.volume);
     if (ps.depth_ms >= 0) cJSON_AddNumberToObject(j, "bufferMs", ps.depth_ms);
+    cJSON *aj = cJSON_AddObjectToObject(o, "audio");
+    cJSON_AddNumberToObject(aj, "blockMaxUs", ps.block_max_us);
+    cJSON_AddNumberToObject(aj, "blockAvgUs", ps.block_avg_us);
     cJSON *dj = cJSON_AddObjectToObject(j, "drift");
     cJSON_AddStringToObject(dj, "mode", ps.drift_mode == 2 ? "catching_up" : ps.drift_mode > 0 ? "dropping"
                                         : ps.drift_mode < 0 ? "repeating" : "idle");
@@ -249,7 +252,7 @@ static void take_reboot_cause(void)
  */
 static void supervise(void)
 {
-    static uint32_t last_played = UINT32_MAX;
+    static uint32_t last_progress;
     static int stalled_s, low_heap_s;
 
     stream_stats_t ss;
@@ -261,12 +264,14 @@ static void supervise(void)
      * I2S is stuck (the player's own checks would have reconnected). A
      * stuck player lets the ring fill, so bytes are the right test here. */
     bool fed = ss.connected && ss.ring_used >= 64 * 1024;
-    if (fed && ps.played_s == last_played) {
+    /* Progress counts frames played or deliberately discarded (catch-up,
+     * reconnect dedupe), so a long catch-up is not mistaken for a hang. */
+    if (fed && ps.progress == last_progress) {
         if (++stalled_s == STALL_REBOOT_S) reboot_for("player stall");
     } else {
         stalled_s = 0;
     }
-    last_played = ps.played_s;
+    last_progress = ps.progress;
 
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < LOW_HEAP_BYTES) {
         if (++low_heap_s == LOW_HEAP_S) reboot_for("low memory");

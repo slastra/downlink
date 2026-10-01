@@ -1,6 +1,8 @@
 /*
- * Decode side: drains the stream ring, decodes Ogg Opus, applies volume,
- * writes I2S. Runs on core 1.
+ * The audio task on core 1: a 10 ms output loop (the blocking I2S write is
+ * the clock) that pulls music from the stream ring, decodes Ogg Opus,
+ * applies the volume ramp and writes the DAC. Sources hand over what they
+ * have and the rest is silence, so nothing upstream can stall the output.
  *
  * Buffering policy, all in audio time (see drift.h): nothing plays until
  * DL_PREBUFFER_MS is buffered; an empty ring mid-play is an underrun (the
@@ -25,13 +27,16 @@ void player_set_volume(int volume_percent);
 typedef struct {
     player_state_t state;
     uint32_t underruns, resets, errors;
-    uint32_t played_s;        /* seconds of audio written to the DAC since boot */
+    uint32_t played_s;        /* seconds of music written to the DAC since boot */
+    uint32_t progress;        /* frames played or deliberately discarded (wraps): the supervisor's pulse */
     int      volume;
     int32_t  depth_ms;        /* audio buffered, -1 when not measurable right now */
     /* buffer-depth control (drift.h) */
     int      drift_mode;      /* 2 catching up, +1 dropping, -1 repeating, 0 idle */
     uint32_t drift_dropped, drift_repeated;
     uint32_t catchups, skipped_s;
+    uint32_t block_max_us;    /* worst decode+mix time per 10 ms block, last 30 s */
+    uint32_t block_avg_us;
 } player_stats_t;
 void player_get_stats(player_stats_t *out);
 void player_status(char *out, size_t len);

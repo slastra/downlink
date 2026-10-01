@@ -195,8 +195,14 @@ board (tspl-station's 30-minute portal and immediate reopen did that).
   byte offset. The player resets the decoder exactly there, so a reconnect
   never feeds the decoder a torn page. If the decoder loses the stream some
   other way, it skips to the next boundary and forces a reconnect.
-- **Underruns.** The DMA clears to silence (no looping buzz). The player
-  logs the underrun and waits for the prebuffer to refill.
+- **One output clock.** The player task writes a 10 ms block to the DAC
+  every 10 ms, and the blocking I2S write is the clock. The music source
+  hands over what it has decoded and the rest is silence, so a rebuffer, a
+  reconnect or a catch-up never stalls the output. Catch-up and reconnect
+  dedupe decode and discard under a time budget per block (8 ms, and none
+  when the output is running late).
+- **Underruns.** 100 ms with nothing to play counts as an underrun, and the
+  player waits for the prebuffer to refill. Shorter gaps play as silence.
 - **Buffering is measured in audio, not bytes.** Opus is variable-bitrate:
   a quiet passage drops from ~130 kbps to ~3 kbps, so a byte count says
   nothing about how much is buffered. (A byte-based first version, on a one-hour
@@ -256,7 +262,7 @@ mosquitto_pub -h <broker> -u … -P … -t downlink/downlink/cmd -m '{"cmd":"url
 |---|---|
 | `{"cmd":"status"}` | publish status now |
 | `{"cmd":"url","url":"http://…"}` | switch streams now (reconnects), saved to NVS |
-| `{"cmd":"volume","value":0-100}` | live, saved to NVS |
+| `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS |
 | `{"cmd":"reboot"}` | reboot after replying |
 
 Status is also published when the state changes or a new stream error
@@ -282,6 +288,7 @@ What to watch:
 | `stream.lastError` | present only when not streaming: `HTTP 404`, `connect failed: …`, `stalled: …`, `stream is Ogg Vorbis, not Opus` |
 | `reset` / `rebootCause` | why the last boot happened; `panic`, `task_wdt` and `brownout` are the ones to worry about |
 | `player.bufferMs` | audio buffered; sits near `drift.targetMs` (absent while a boundary is in the ring) |
+| `audio.blockAvgUs` / `blockMaxUs` | CPU per 10 ms output block (decode and mix), average and the worst of the last 30 s; ~1–2 ms is normal, ~6 ms during a catch-up, and the DMA covers up to ~80 ms |
 | `player.underruns` | should stay flat; rising means the network can't keep up |
 | `player.drift` | `dropped`/`repeated` grow slowly in one direction for good (that's the clock difference being absorbed); `catchups` counts backlog jumps |
 | `heapMin`, `stackFree` | lowest free memory seen; a number trending toward zero is a crash that hasn't happened yet |
@@ -322,7 +329,8 @@ The last three lines are a heartbeat every 30 s.
 | `main/main.c` | startup, LED state, MQTT status and commands, the supervisor |
 | `main/stream.c` | HTTP client task, redirects, ICY demux, ring writer, boundaries, `lastError` |
 | `main/ogg_sniff.c` | Ogg page walker: BOS offsets, codec check, OpusTags, sequence renumbering |
-| `main/player.cpp` | ring → `micro_opus::OggOpusDecoder` → depth control → volume → I2S |
+| `main/player.cpp` | music source (ring → `micro_opus::OggOpusDecoder` → depth control) and the 10 ms output loop |
+| `main/mixer.c` | output-stage gain: per-sample volume ramps (plain C, host-tested) |
 | `main/drift.c` | buffer-depth control: drift and catch-up (plain C, host-tested) |
 | `main/audio_out.c` | `i2s_std` setup for the PCM5102A |
 | `main/settings.c` | device id, stream URL, volume in NVS (`downlink` namespace) |
