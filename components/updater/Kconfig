@@ -1,0 +1,40 @@
+menu "Updates (OTA)"
+
+config DL_OTA_MANIFEST_URL
+    string "Manifest URL"
+    default "https://github.com/slastra/downlink/releases/latest/download/manifest.json"
+    help
+        Where boards look for new releases. GitHub redirects "latest" to the
+        newest non-prerelease, so publishing a release is the whole rollout.
+        Overridable per check over MQTT ({"cmd":"ota.check","manifest":...}).
+
+config DL_OTA_CHECK_H
+    int "Hours between checks"
+    default 6
+    range 1 168
+    help
+        A check only reports what is available (status "ota.available"); an
+        install needs {"cmd":"ota"}. The first check is a minute after the
+        broker first connects; a failed one is retried after 30 minutes.
+
+config DL_OTA_CONFIRM_MIN
+    int "Minutes for a new image to reach the broker"
+    default 10
+    range 1 120
+    help
+        A new image must reach the broker within this long after boot, or the
+        board rolls back to the previous one. Reaching the broker is what
+        proves it can still be managed (and updated again).
+
+config DL_OTA_PAUSE_MS
+    int "Pause after each 4 KB written (ms)"
+    default 10
+    range 0 200
+    help
+        Each flash sector erase stalls both cores and PSRAM for tens of ms.
+        The music is faded out for the download (the stalls chop it up
+        audibly even when the output never underruns), so this only leaves
+        the other tasks (WiFi, MQTT, the player) room between erases.
+        0 writes flat out.
+
+endmenu

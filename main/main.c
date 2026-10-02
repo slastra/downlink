@@ -12,14 +12,17 @@
  *
  * Remotely, the board reports health on MQTT (retained status every 30 s
  * and on every state change) and takes commands: status, url, volume,
- * announce, reboot. See README "Remote management" and "Announcements". A
- * supervisor here reboots it, with the reason recorded, if it wedges.
+ * announce, ota, ota.check, reboot. See README "Remote management",
+ * "Announcements" and "Updates". A supervisor here reboots it, with the
+ * reason recorded, if it wedges, and rolls back an update that never
+ * reached the broker.
  */
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "esp_app_desc.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -36,6 +39,7 @@
 #include "provision.h"
 #include "settings.h"
 #include "stream.h"
+#include "updater.h"
 #include "uplink.h"
 
 static const char *TAG = "main";
@@ -48,6 +52,12 @@ static const char *TAG = "main";
 #define STALL_REBOOT_S  60              /* data waiting, nothing played */
 #define LOW_HEAP_BYTES  (16 * 1024)     /* internal RAM */
 #define LOW_HEAP_S      10
+
+/* After an update installs, wait this long at most for queued
+ * announcements to finish before rebooting into it. */
+#define OTA_DRAIN_S     60
+#define OTA_RETRY_S     (30 * 60)       /* after a failed scheduled check */
+#define OTA_FIRST_S     60              /* first check, after the broker is up */
 
 /* Why we rebooted ourselves, kept across the software reset in RTC memory
  * (not cleared by it, unlike .bss) and reported in the next status. */
@@ -68,20 +78,28 @@ static int current_status(void)
     return player_state() == PLAYER_PLAYING ? ST_PLAYING : ST_BUFFERING;
 }
 
-/* The LED's own order: an announcement shows above the stream states (it
- * plays whether or not there is music), below the portal and WiFi. The
- * published `state` stays the stream's: linkify reads it as a closed set. */
+/* The LED's own order: a download and then an announcement show above the
+ * stream states (both happen whether or not there is music), below the
+ * portal and WiFi. The published `state` stays the stream's: linkify reads
+ * it as a closed set. */
 #define LED_ST_ANNOUNCING 100
+#define LED_ST_UPDATING   101
 
 static int update_led(void)
 {
     static int shown = -1;
     int st = current_status();
     int led = st;
-    if (st != ST_PORTAL_CLIENT && st != ST_PORTAL && st != ST_NO_WIFI && announce_sounding()) led = LED_ST_ANNOUNCING;
+    if (st != ST_PORTAL_CLIENT && st != ST_PORTAL && st != ST_NO_WIFI) {
+        updater_status_t us;
+        updater_get_status(&us);
+        if (us.state == UPD_DOWNLOADING) led = LED_ST_UPDATING;
+        else if (announce_sounding())    led = LED_ST_ANNOUNCING;
+    }
     if (led == shown) return st;
     shown = led;
     switch (led) {
+    case LED_ST_UPDATING:  LED_UPDATING();         break;
     case LED_ST_ANNOUNCING: LED_ANNOUNCING();      break;
     case ST_PORTAL_CLIENT: LED_PROVISION_CLIENT(); break;
     case ST_PORTAL:        LED_PROVISION();        break;
@@ -103,6 +121,7 @@ static const char *const STATUS_NAMES[] = {
 /* ---- remote health / commands ------------------------------------- */
 
 static volatile bool s_publish_now;
+static volatile bool s_ota_installed;   /* reboot into it once announcements drain */
 
 static void publish_health(int st)
 {
@@ -161,7 +180,7 @@ static void publish_health(int st)
     /* Stack headroom (bytes never touched) per task: a number that trends
      * toward zero is a crash that has not happened yet. */
     j = cJSON_AddObjectToObject(o, "stackFree");
-    static const char *const TASKS[] = { "main", "stream", "player", "fetch", "mqtt_pub", "mqtt_task", "wifi_join" };
+    static const char *const TASKS[] = { "main", "stream", "player", "fetch", "ota", "mqtt_pub", "mqtt_task", "wifi_join" };
     for (size_t i = 0; i < sizeof TASKS / sizeof *TASKS; i++) {
         TaskHandle_t h = xTaskGetHandle(TASKS[i]);
         if (h) cJSON_AddNumberToObject(j, TASKS[i], uxTaskGetStackHighWaterMark(h));
@@ -175,6 +194,16 @@ static void publish_health(int st)
     }
     cJSON_AddNumberToObject(j, "drops", ni.drops);
     cJSON_AddNumberToObject(j, "roams", ni.roams);
+
+    updater_status_t us;
+    updater_get_status(&us);
+    j = cJSON_AddObjectToObject(o, "ota");
+    cJSON_AddStringToObject(j, "state", us.unconfirmed && us.state == UPD_IDLE ? "unconfirmed" : updater_state_name(us.state));
+    if (us.state == UPD_DOWNLOADING) cJSON_AddNumberToObject(j, "percent", us.percent);
+    if (us.available[0]) cJSON_AddStringToObject(j, "available", us.available);
+    if (us.checked_us) cJSON_AddNumberToObject(j, "checkedS", (double)((esp_timer_get_time() - us.checked_us) / 1000000));
+    if (us.last_error[0]) cJSON_AddStringToObject(j, "lastError", us.last_error);
+    if (us.rolled_back[0]) cJSON_AddStringToObject(j, "rolledBack", us.rolled_back);
 
     /* Clips live in PSRAM: the largest free block shows fragmentation. */
     cJSON_AddNumberToObject(o, "psramLargest", (double)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
@@ -216,6 +245,11 @@ static void on_announce(const cJSON *root)
     }
     int volume = cJSON_IsNumber(jvol) ? (int)jvol->valuedouble : 100;   /* unity: chosen by ear over -14 dB ducked music */
     int duck = cJSON_IsNumber(jduck) ? (int)jduck->valuedouble : -14;   /* both clamped by the queue */
+    /* The output is faded out for a download, and a clip's TLS handshake
+     * must not overlap the update's (internal RAM). */
+    updater_status_t us;
+    updater_get_status(&us);
+    if (us.state == UPD_DOWNLOADING || s_ota_installed) { announce_reject(id, "updating"); return; }
     int pos = announce_enqueue(id, url, volume, duck);
     if (!pos) { announce_reject(id, "queue full"); return; }
 
@@ -224,6 +258,63 @@ static void on_announce(const cJSON *root)
     cJSON_AddNumberToObject(d, "queued", pos);
     uplink_publish_cmd_result_json("announce", true, d);
     s_publish_now = true;   /* the status's announce.queued */
+}
+
+/* {"cmd":"ota"} installs the manifest's image (force: past the dev-build
+ * and failed-before skips); with url and sha256, that image instead.
+ * {"cmd":"ota.check"} only looks. Progress follows on downlink/<id>/ota. */
+static void on_ota(const char *cmd, const cJSON *root)
+{
+    const cJSON *jurl = cJSON_GetObjectItem(root, "url");
+    const cJSON *jsha = cJSON_GetObjectItem(root, "sha256");
+    const cJSON *jman = cJSON_GetObjectItem(root, "manifest");
+    const char *manifest = cJSON_IsString(jman) ? jman->valuestring : CONFIG_DL_OTA_MANIFEST_URL;
+    const char *why = NULL;
+    bool ok;
+    /* A clip download's TLS handshake and ours each take ~30 KB of
+     * internal RAM for a moment; never both at once. */
+    announce_stats_t as;
+    announce_get_stats(&as);
+    if (as.queued) {
+        uplink_publish_cmd_result(cmd, false, "announcements in progress; try again when they finish");
+        return;
+    }
+    if (s_ota_installed) {
+        uplink_publish_cmd_result(cmd, false, "an update is installed; rebooting into it");
+        return;
+    }
+    if (!strcmp(cmd, "ota.check")) {
+        ok = updater_check(manifest, false, false, &why);
+    } else if (cJSON_IsString(jurl)) {
+        ok = updater_install(jurl->valuestring, cJSON_IsString(jsha) ? jsha->valuestring : NULL, &why);
+    } else {
+        ok = updater_check(manifest, true, cJSON_IsTrue(cJSON_GetObjectItem(root, "force")), &why);
+    }
+    if (!ok) {
+        uplink_publish_cmd_result(cmd, false, why);
+        return;
+    }
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "running", esp_app_get_description()->version);
+    uplink_publish_cmd_result_json(cmd, true, d);
+}
+
+/* On the updater task. downlink/<id>/ota: {"state","version"?,"percent"?,"error"?} */
+static void on_ota_event(const updater_event_t *e)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "state", updater_ev_name(e->kind));
+    if (e->version[0]) cJSON_AddStringToObject(o, "version", e->version);
+    if (e->kind == UPD_EV_DOWNLOADING) cJSON_AddNumberToObject(o, "percent", e->percent);
+    if (e->kind == UPD_EV_FAILED) cJSON_AddStringToObject(o, "error", e->detail);
+    ESP_LOGI(TAG, "ota: %s %s%s%s", updater_ev_name(e->kind), e->version, e->detail[0] ? " " : "", e->detail);
+    uplink_publish_event("ota", o);
+    /* Flash erases stall decoding, so the music fades out for the download
+     * and comes back if it fails; after an install the reboot follows. */
+    if (e->kind == UPD_EV_DOWNLOADING && e->percent == 0) player_set_hold(true);
+    if (e->kind == UPD_EV_FAILED) player_set_hold(false);
+    if (e->kind == UPD_EV_INSTALLED) s_ota_installed = true;
+    if (e->kind != UPD_EV_DOWNLOADING || e->percent == 0) s_publish_now = true;
 }
 
 /* On the esp-mqtt event task: quick work only. */
@@ -264,11 +355,13 @@ static void on_cmd(cJSON *root)
         }
     } else if (!strcmp(cmd, "announce")) {
         on_announce(root);
+    } else if (!strcmp(cmd, "ota") || !strcmp(cmd, "ota.check")) {
+        on_ota(cmd, root);
     } else if (!strcmp(cmd, "reboot")) {
         uplink_publish_cmd_result(cmd, true, NULL);
         reboot_for("mqtt command");
     } else {
-        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, reboot");
+        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, ota, ota.check, reboot");
     }
     cJSON_Delete(root);
 }
@@ -286,7 +379,13 @@ static void publish_announce_event(const announce_event_t *e)
     uplink_publish_event("announce", o);
 }
 
-static void on_mqtt_up(void) { s_publish_now = true; }
+/* Reaching the broker (connected and subscribed) is what confirms a new
+ * image: it can still be managed, and updated again. */
+static void on_mqtt_up(void)
+{
+    updater_mark_valid();
+    s_publish_now = true;
+}
 
 static void on_net_up(void)   { stream_set_link(true); }
 static void on_net_down(void) { stream_set_link(false); }
@@ -356,6 +455,51 @@ static void supervise(void)
     } else {
         low_heap_s = 0;
     }
+
+    /* A new image that has not reached the broker in time goes back to the
+     * old one, which did. */
+    if (updater_unconfirmed() && esp_timer_get_time() >= (int64_t)CONFIG_DL_OTA_CONFIRM_MIN * 60 * 1000000) {
+        strlcpy(s_reboot_why, "ota unconfirmed", sizeof s_reboot_why);
+        s_reboot_magic = REBOOT_MAGIC;
+        updater_rollback_and_reboot();
+    }
+}
+
+/* Once a second: the scheduled check (it only looks; installing is a
+ * command), and the reboot into an installed update. */
+static void ota_duty(void)
+{
+    static int64_t first_due_us = -1, last_try_us, drain_since_us;
+    static bool rebooting;
+    int64_t now = esp_timer_get_time();
+
+    if (rebooting) return;
+    if (s_ota_installed) {
+        announce_stats_t qs;
+        announce_get_stats(&qs);
+        if (!drain_since_us) drain_since_us = now;
+        if (qs.queued == 0 || now - drain_since_us >= (int64_t)OTA_DRAIN_S * 1000000) {
+            rebooting = true;
+            reboot_for("ota");
+        }
+        return;
+    }
+
+    if (!uplink_is_up() || updater_busy()) return;
+    announce_stats_t as;
+    announce_get_stats(&as);
+    if (as.queued) return;   /* one TLS handshake at a time; see on_ota */
+    if (first_due_us < 0) first_due_us = now + (int64_t)OTA_FIRST_S * 1000000;
+    /* The last try succeeded if a good check has landed since; a failed one
+     * is retried sooner, or the board goes hours not knowing what's out. */
+    updater_status_t us;
+    updater_get_status(&us);
+    int64_t due = !last_try_us                   ? first_due_us
+                : us.checked_us >= last_try_us   ? us.checked_us + (int64_t)CONFIG_DL_OTA_CHECK_H * 3600 * 1000000
+                :                                  last_try_us + (int64_t)OTA_RETRY_S * 1000000;
+    if (now < due) return;
+    last_try_us = now;
+    updater_check(CONFIG_DL_OTA_MANIFEST_URL, false, false, NULL);
 }
 
 static void button_task(void *arg)
@@ -386,9 +530,11 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
     take_reboot_cause();
+    updater_init(CONFIG_DL_BOARD, on_ota_event);
+    updater_boot_audit();
     settings_load();
     led_init();
-    ESP_LOGI(TAG, "downlink %s -> %s", settings_id(), settings_url());
+    ESP_LOGI(TAG, "downlink %s (%s, %s) -> %s", esp_app_get_description()->version, CONFIG_DL_BOARD, settings_id(), settings_url());
 
     stream_start(settings_url());
     announce_init();
@@ -439,6 +585,7 @@ void app_main(void)
         last_1s_us = now;
         provision_poll();
         supervise();
+        ota_duty();
         if (now - last_hb_us < (int64_t)HEARTBEAT_S * 1000000) continue;
         last_hb_us = now;
         netlink_status(line, sizeof line);

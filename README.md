@@ -111,7 +111,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 `sdkconfig.defaults` is only applied when `sdkconfig` doesn't exist. After
 editing either defaults file, `rm sdkconfig` (or use `idf.py menuconfig`).
 
-Image: about 1.15 MB against 3 MB OTA slots (1.9 MB on the SuperMini).
+Image: about 1.2 MB against 3 MB OTA slots (1.9 MB on the SuperMini).
 `dependencies.lock` is committed and the registry components are pinned,
 so a later build uses the same versions.
 
@@ -264,6 +264,7 @@ mosquitto_pub -h <broker> -u … -P … -t downlink/downlink/cmd -m '{"cmd":"url
 | `{"cmd":"url","url":"http://…"}` | switch streams now (reconnects), saved to NVS |
 | `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS; the master for music and announcements |
 | `{"cmd":"announce","id":"…","url":"https://…"}` | play a clip over the music; see [Announcements](#announcements) |
+| `{"cmd":"ota"}`, `{"cmd":"ota.check"}` | install or check for a release; see [Updates](#updates-ota) |
 | `{"cmd":"reboot"}` | reboot after replying |
 
 Status is also published when the state changes or a new stream error
@@ -287,7 +288,8 @@ What to watch:
 |---|---|
 | `state` | same as the LED: `portal`, `portal_client`, `no_wifi`, `wrong_codec`, `connecting`, `buffering`, `playing` |
 | `stream.lastError` | present only when not streaming: `HTTP 404`, `connect failed: …`, `stalled: …`, `stream is Ogg Vorbis, not Opus` |
-| `reset` / `rebootCause` | why the last boot happened; `panic`, `task_wdt` and `brownout` are the ones to worry about |
+| `reset` / `rebootCause` | why the last boot happened; `panic`, `task_wdt` and `brownout` are the ones to worry about; `ota` and `ota unconfirmed` are updates |
+| `fw` / `ota.available` | running version, and a newer release when there is one |
 | `player.bufferMs` | audio buffered; sits near `drift.targetMs` (absent while a boundary is in the ring) |
 | `audio.blockAvgUs` / `blockMaxUs` | CPU per 10 ms output block (decode and mix), average and the worst of the last 30 s; ~1–2 ms is normal, ~6 ms during a catch-up, and the DMA covers up to ~80 ms |
 | `player.underruns` | should stay flat; rising means the network can't keep up |
@@ -353,6 +355,95 @@ Behaviour:
   to about −16 LUFS / −1.5 dBTP; that's what volume 100 and duck −14 were
   chosen against, by ear. The queue isn't persisted across a reboot.
 
+### Updates (OTA)
+
+Boards update themselves from this repo's GitHub Releases. Each release
+carries one image per board and a `manifest.json`:
+
+```json
+{"version":"v0.1.0",
+ "boards":{"supermini":{"url":"https://github.com/slastra/downlink/releases/download/v0.1.0/downlink-supermini-v0.1.0.bin","sha256":"…","size":1225520},
+           "n16r8":{"url":"…","sha256":"…","size":1233712}}}
+```
+
+**Checking is automatic, installing isn't.** A board fetches
+`releases/latest/download/manifest.json` a minute after it first reaches
+the broker and every `DL_OTA_CHECK_H` (6) hours after, and reports a newer
+version as `ota.available`. It installs only when told to, because an
+install ends in a reboot (a few seconds of silence):
+
+| Command | |
+|---|---|
+| `{"cmd":"ota"}` | check, and install the manifest's image for this board if it isn't the running version |
+| `{"cmd":"ota","force":true}` | the same, past the two skips below |
+| `{"cmd":"ota","url":"…","sha256":"…"}` | install that image instead (a canary, a downgrade, a bench test) |
+| `{"cmd":"ota.check"}` | check only; `"manifest":"…"` checks another manifest |
+
+Both are refused while announcements are queued (each TLS handshake takes
+~30 KB of internal RAM for a moment, so they take turns), and an
+announcement is refused with `updating` while an update downloads. Progress follows
+on `downlink/<id>/ota` (QoS 1, not retained):
+
+```json
+{"state":"checking"}
+{"state":"available","version":"v0.2.0"}     // ota.check
+{"state":"current","version":"v0.1.0"}
+{"state":"downloading","version":"v0.2.0","percent":40}
+{"state":"installed","version":"v0.2.0"}     // reboots once announcements finish (60 s at most)
+{"state":"failed","error":"sha256 mismatch"}
+```
+
+The status gains `"ota":{"state","available"?,"checkedS"?,"lastError"?,"rolledBack"?}`,
+where `state` is `idle`, `checking`, `downloading` (with `percent`) or
+`unconfirmed` (a new image that hasn't reached the broker yet).
+
+What protects a board nobody can reach:
+
+- **Music fades out for the download.** Every flash erase stalls both
+  cores and PSRAM. Playing through one was tried: nothing underran, but the
+  music stuttered audibly. So it fades out over 0.5 s before the first
+  write, comes back if the download fails, and the board reboots into the
+  new image when it succeeds. Announcements sent meanwhile are refused
+  with `updating`. A download takes about 20 s on a good link.
+- **Checked before it can boot.** The image's app descriptor must say
+  `downlink` and the manifest's version before anything is written. After
+  the download, the written partition is read back and its SHA-256 compared
+  with the manifest's, and its flash-size header compared with this
+  board's (an N16R8 image on a SuperMini is refused), all before the slot
+  is made bootable.
+- **Rollback.** A new image boots on probation and must reach the broker
+  within `DL_OTA_CONFIRM_MIN` (10) minutes; reaching it is what proves the
+  board can still be managed and updated again. A crash, a hang or a
+  timeout before then, and the bootloader goes back to the previous image.
+  The status then shows `rolledBack`, and that image is skipped until a
+  different one is released (or `force`).
+- **Dev builds stay put.** A board running anything but an exact release
+  tag (`0333a29`, `v0.1.0-3-gabc1234`, `…-dirty`) won't install from the
+  manifest without `force`.
+- **No credentials in public images.** Release images are built without
+  `sdkconfig.defaults.local`. A board keeps its WiFi and broker settings in
+  NVS, so an update doesn't touch them; a brand-new board is still flashed
+  over USB with the local seeds.
+
+Rollback lives in the bootloader, so a board needs **one USB flash** of a
+build with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` (any build since OTA
+landed) before its first OTA.
+
+**Releasing** (`tools/release`, needs `uv` and `gh`):
+
+```sh
+. ~/Projects/Esp/esp-idf-v6.1/export.sh
+./tools/release v0.2.0              # tag, build both boards clean, scan, stage dist/v0.2.0/
+./tools/release v0.2.0 --publish    # the same, then push the tag and create the release
+```
+
+It refuses a dirty tree, an existing tag, or a commit not yet on
+`origin/main`, checks each image reports the tag, and aborts (deleting the
+tag) if any value from `sdkconfig.defaults.local` appears in an image. The
+release becomes "latest" at once; boards see it on their next check and
+install on command. Boards compare versions by equality, so rolling back
+means releasing again (a revert, as a new version).
+
 ### Status LED
 
 The onboard WS2812 (GPIO48 on both boards) shows the first state that
@@ -362,6 +453,7 @@ applies. Brightness is `DL_LED_BRIGHTNESS` (15%).
 |---|---|
 | magenta pulse / solid | portal open / a phone is on it |
 | red | no WiFi |
+| fast blue pulse | downloading an update |
 | white pulse | announcing |
 | slow red pulse | the mount isn't Opus (switch RUMP's codec) |
 | yellow pulse | WiFi up, stream not connected (retrying) |
@@ -400,12 +492,13 @@ The last three lines are a heartbeat every 30 s.
 | `components/provision` | captive portal (from tspl-station, plus a stream URL field) |
 | `components/uplink` | MQTT: retained status, will, commands (slimmed from tspl-station) |
 | `components/led` | WS2812 status LED (from tspl-station) |
+| `components/updater` | OTA from GitHub Releases: manifest, throttled download, readback, rollback (from tspl-station) |
 | `test/host` | host tests: `make -C test/host` |
 | `tools/fake-icecast` | bench Icecast stand-in: burst, real-time pacing, forced drops |
+| `tools/release` | builds, checks and publishes a release |
 
 ## Not yet
 
 - MP3 via `esphome/micro-mp3`, with the decoder chosen by `Content-Type`.
-- OTA from GitHub Releases (the partition tables already have the slots).
 - MQTT over TLS (8883). Plain 1883 sends the broker password in the clear,
   which matters once the board is on someone else's network.

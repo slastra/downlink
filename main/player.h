@@ -11,6 +11,7 @@
  * above DL_BUFFER_MAX_MS.
  */
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,6 +24,11 @@ typedef enum { PLAYER_BUFFERING, PLAYER_PLAYING, PLAYER_SKIPPING } player_state_
 void player_start(int volume_percent);
 player_state_t player_state(void);
 void player_set_volume(int volume_percent);
+/* Fade the whole output out (true) or back to the volume (false) over
+ * PLAYER_HOLD_FADE_MS. For a firmware download: its flash erases stall
+ * decoding, and silence beats a stutter. */
+#define PLAYER_HOLD_FADE_MS 500
+void player_set_hold(bool hold);
 
 typedef struct {
     player_state_t state;

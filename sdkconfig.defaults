@@ -66,6 +66,11 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 # reason ("task_wdt") lands in the retained status.
 CONFIG_ESP_TASK_WDT_PANIC=y
 
+# OTA: a new image boots on probation and the bootloader goes back to the
+# old one unless it reaches the broker (updater_mark_valid). This lives in
+# the bootloader, so a board needs one USB flash before its first OTA.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Empty here so the file stays safe to commit; see sdkconfig.defaults.local.
 CONFIG_NETLINK_SSID0=""
 CONFIG_NETLINK_PASS0=""

@@ -51,6 +51,7 @@ static const char *const STATE_NAMES[] = { "buffering", "playing", "skipping" };
 static volatile player_state_t s_state = BUFFERING;
 static volatile int32_t  s_volume_q15;           /* set by player_set_volume, picked up per block */
 static volatile int      s_volume;
+static volatile bool     s_hold;                 /* player_set_hold: faded out */
 static uint32_t s_underruns, s_resets, s_errors;
 /* Counters other tasks read are 32-bit, so a read never tears. */
 static volatile uint32_t s_played_s;             /* music seconds that reached the DAC */
@@ -395,9 +396,10 @@ static void player_task(void *arg)
         gain_ramp_t *ann_gain;
         const int16_t *clip = announce_process(block, BLOCK, &ann_gain);
 
-        int32_t v = s_volume_q15;
+        int32_t v = s_hold ? 0 : s_volume_q15;
         if (v != master_set) {
-            gain_ramp_set(&master, v, VOLUME_RAMP);
+            bool fade = !v || !master_set;   /* into or out of a hold */
+            gain_ramp_set(&master, v, fade ? PLAYER_HOLD_FADE_MS * FRAMES_PER_MS : VOLUME_RAMP);
             master_set = v;
         }
         mix_block(block, clip, BLOCK, ann_gain, &master);
@@ -430,6 +432,12 @@ static void player_task(void *arg)
             window_start = t2;
         }
     }
+}
+
+extern "C" void player_set_hold(bool hold)
+{
+    if (hold != s_hold) ESP_LOGI(TAG, "%s", hold ? "holding: fading out" : "resuming: fading in");
+    s_hold = hold;
 }
 
 extern "C" void player_set_volume(int volume_percent)

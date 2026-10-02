@@ -7,3 +7,5 @@ sdkconfig.defaults.local
 test/host/test_ogg_sniff
 test/host/test_drift
 test/host/test_mixer
+dist/
+build-release/

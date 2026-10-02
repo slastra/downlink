@@ -1,0 +1,162 @@
+#!/usr/bin/env -S uv run --quiet --script
+"""
+release -- build public OTA images for every board and stage a GitHub release.
+
+Boards check https://github.com/slastra/downlink/releases/latest/download/manifest.json
+(README "Updates"). This script produces what that manifest points at:
+
+  1. refuses a dirty tree, an existing tag, or a HEAD not yet on origin/main
+     (the release must be built from public source), then tags HEAD;
+  2. builds each board from scratch WITHOUT sdkconfig.defaults.local, so no
+     WiFi or broker credentials go into a public image (boards keep theirs
+     in NVS across updates);
+  3. checks each image reports the tag as its version, and scans it for
+     every value in sdkconfig.defaults.local: any hit aborts and deletes
+     the tag;
+  4. writes dist/<tag>/ with downlink-<board>-<tag>.bin and manifest.json;
+  5. with --publish, pushes the tag and creates the GitHub release (which
+     becomes "latest", so every board sees it on its next check).
+     Without it, prints those commands.
+
+  ./tools/release v0.1.0
+  ./tools/release v0.1.0 --publish --notes "Announcement volume defaults to 100"
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+REPO = "slastra/downlink"
+BOARDS = {
+    "n16r8": "sdkconfig.defaults",
+    "supermini": "sdkconfig.defaults;sdkconfig.supermini",
+}
+
+
+def sh(*args, check=True) -> str:
+    return subprocess.run(args, cwd=ROOT, text=True, capture_output=True, check=check).stdout.strip()
+
+
+def app_desc(image: bytes) -> tuple[str, str]:
+    """(version, project_name) from the esp_app_desc_t after the image
+    header (24 B) and the first segment header (8 B)."""
+    off = 24 + 8
+    magic = int.from_bytes(image[off:off + 4], "little")
+    if magic != 0xABCD5432:
+        sys.exit(f"no app descriptor in image (magic {magic:#x})")
+    version = image[off + 16:off + 48].split(b"\0", 1)[0].decode()
+    project = image[off + 48:off + 80].split(b"\0", 1)[0].decode()
+    return version, project
+
+
+def secrets() -> dict[str, str]:
+    """Every non-empty string value in sdkconfig.defaults.local."""
+    local = ROOT / "sdkconfig.defaults.local"
+    if not local.exists():
+        return {}
+    out = {}
+    for line in local.read_text().splitlines():
+        m = re.match(r'^(CONFIG_\w+)="(.+)"$', line.strip())
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("tag", help="vMAJOR.MINOR.PATCH")
+    ap.add_argument("--publish", action="store_true", help="push the tag and create the GitHub release")
+    ap.add_argument("--notes", default="", help="release notes (default: commits since the last tag)")
+    args = ap.parse_args()
+    tag = args.tag
+
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?", tag) or "-g" in tag:
+        sys.exit(f"{tag!r} is not a release tag like v0.1.0")
+    idf_path, idf_py = os.environ.get("IDF_PATH"), os.environ.get("IDF_PYTHON_ENV_PATH")
+    if not idf_path or not idf_py:
+        sys.exit("run '. ~/Projects/Esp/esp-idf-v6.1/export.sh' first")
+    if sh("git", "status", "--porcelain"):
+        sys.exit("working tree is dirty; commit first")
+    if sh("git", "tag", "-l", tag):
+        sys.exit(f"tag {tag} already exists")
+    sh("git", "fetch", "--quiet", "origin", "main")
+    if subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=ROOT).returncode:
+        sys.exit("HEAD is not on origin/main; push it first (a release must match public source)")
+
+    previous = sh("git", "describe", "--tags", "--abbrev=0", check=False)
+    sh("git", "tag", "-a", tag, "-m", f"downlink {tag}")
+    print(f"tagged {tag} at {sh('git', 'rev-parse', '--short', 'HEAD')}")
+
+    def abort(msg: str):
+        sh("git", "tag", "-d", tag)
+        sys.exit(f"{msg}\n(tag {tag} deleted)")
+
+    secret = secrets()
+    dist = ROOT / "dist" / tag
+    if dist.exists():
+        shutil.rmtree(dist)
+    dist.mkdir(parents=True)
+    manifest = {"version": tag, "boards": {}}
+
+    for board, defaults in BOARDS.items():
+        bdir = ROOT / "build-release" / board
+        if bdir.exists():
+            shutil.rmtree(bdir)
+        print(f"building {board} ...", flush=True)
+        r = subprocess.run([f"{idf_py}/bin/python", f"{idf_path}/tools/idf.py", "-B", str(bdir),
+                            "-DDL_RELEASE=1", f"-DSDKCONFIG={bdir}/sdkconfig",
+                            f"-DSDKCONFIG_DEFAULTS={defaults}", "build"],
+                           cwd=ROOT, capture_output=True, text=True)
+        if r.returncode:
+            abort(f"{board} build failed:\n" + "\n".join(r.stdout.splitlines()[-20:]) + r.stderr[-2000:])
+
+        image = (bdir / "downlink.bin").read_bytes()
+        version, project = app_desc(image)
+        if version != tag or project != "downlink":
+            abort(f"{board} image reports {project} {version!r}, expected downlink {tag!r}")
+        cfg = (bdir / "sdkconfig").read_text()
+        if f'CONFIG_DL_BOARD="{board}"' not in cfg:
+            abort(f"{board} image was built with another CONFIG_DL_BOARD")
+        for key, value in secret.items():
+            if value.encode() in image or f'{key}="{value}"' in cfg:
+                abort(f"{board} image contains the value of {key} from sdkconfig.defaults.local; not publishing")
+
+        name = f"downlink-{board}-{tag}.bin"
+        (dist / name).write_bytes(image)
+        manifest["boards"][board] = {
+            "url": f"https://github.com/{REPO}/releases/download/{tag}/{name}",
+            "sha256": hashlib.sha256(image).hexdigest(),
+            "size": len(image),
+        }
+        print(f"  {name}  {len(image) / 1048576:.2f} MB  clean of {len(secret)} local values")
+
+    (dist / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"staged {dist}")
+
+    notes = args.notes
+    if not notes:
+        span = f"{previous}..{tag}" if previous else tag
+        notes = sh("git", "log", "--format=- %s", span)
+    files = [str(p) for p in sorted(dist.iterdir())]
+    push = ["git", "push", "origin", tag]
+    create = ["gh", "release", "create", tag, *files, "--repo", REPO, "--title", f"downlink {tag}",
+              "--notes", notes, "--latest"]
+    if not args.publish:
+        print("\nto publish (boards see it on their next check; install with {\"cmd\":\"ota\"}):\n"
+              f"  {' '.join(push)}\n  gh release create {tag} dist/{tag}/* --repo {REPO} --title 'downlink {tag}' --latest")
+        print(f"or drop the local tag: git tag -d {tag}")
+        return 0
+    subprocess.run(push, cwd=ROOT, check=True)
+    subprocess.run(create, cwd=ROOT, check=True)
+    print(f"published https://github.com/{REPO}/releases/tag/{tag}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

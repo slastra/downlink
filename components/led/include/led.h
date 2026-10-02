@@ -29,3 +29,4 @@ void led_pulse(uint8_t r, uint8_t g, uint8_t b, uint32_t period_ms);
 #define LED_BUFFERING()        led_base(0, 0, 255)          /* blue: filling the ring */
 #define LED_PLAYING()          led_base(0, 255, 0)          /* green */
 #define LED_ANNOUNCING()       led_pulse(255, 255, 255, 1000) /* white blink: an announcement is playing */
+#define LED_UPDATING()         led_pulse(0, 0, 255, 300)    /* fast blue pulse: downloading an update (cyan read as white) */
