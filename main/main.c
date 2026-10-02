@@ -319,6 +319,49 @@ static void on_ota_event(const updater_event_t *e)
     if (e->kind != UPD_EV_DOWNLOADING || e->percent == 0) s_publish_now = true;
 }
 
+/* Saved networks as {"networks":[{"ssid","prio"}],"connected"?}. Never
+ * passwords: netlink_cred_list blanks them. */
+static cJSON *wifi_list_json(void)
+{
+    netlink_cred_t creds[8];
+    int n = netlink_cred_list(creds, 8);
+    netlink_info_t ni;
+    netlink_get_info(&ni);
+    cJSON *d = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(d, "networks");
+    for (int i = 0; i < n; i++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "ssid", creds[i].ssid);
+        cJSON_AddNumberToObject(e, "prio", creds[i].prio);
+        cJSON_AddItemToArray(arr, e);
+    }
+    if (ni.ssid[0]) cJSON_AddStringToObject(d, "connected", ni.ssid);
+    return d;
+}
+
+/* {"cmd":"wifi.forget","ssid"} -- removing the only saved network would
+ * leave a remote board unreachable until someone opens its portal, so that
+ * needs "force". The current connection stays up until it drops or the
+ * board reboots. */
+static void on_wifi_forget(const char *cmd, const cJSON *root)
+{
+    const cJSON *js = cJSON_GetObjectItem(root, "ssid");
+    const char *ssid = cJSON_IsString(js) ? js->valuestring : "";
+    netlink_cred_t creds[8];
+    int n = netlink_cred_list(creds, 8);
+    bool saved = false;
+    for (int i = 0; i < n; i++) saved |= !strcmp(creds[i].ssid, ssid);
+    if (!ssid[0])  { uplink_publish_cmd_result(cmd, false, "missing ssid"); return; }
+    if (!saved)    { uplink_publish_cmd_result(cmd, false, "not a saved network"); return; }
+    if (n == 1 && !cJSON_IsTrue(cJSON_GetObjectItem(root, "force"))) {
+        uplink_publish_cmd_result(cmd, false, "that's the only saved network: the board would be unreachable "
+                                              "until someone uses its portal; send force to do it anyway");
+        return;
+    }
+    if (!netlink_cred_remove(ssid)) { uplink_publish_cmd_result(cmd, false, "could not save"); return; }
+    uplink_publish_cmd_result_json(cmd, true, wifi_list_json());
+}
+
 /* On the esp-mqtt event task: quick work only. */
 static void on_cmd(cJSON *root)
 {
@@ -359,11 +402,15 @@ static void on_cmd(cJSON *root)
         on_announce(root);
     } else if (!strcmp(cmd, "ota") || !strcmp(cmd, "ota.check")) {
         on_ota(cmd, root);
+    } else if (!strcmp(cmd, "wifi")) {
+        uplink_publish_cmd_result_json(cmd, true, wifi_list_json());
+    } else if (!strcmp(cmd, "wifi.forget")) {
+        on_wifi_forget(cmd, root);
     } else if (!strcmp(cmd, "reboot")) {
         uplink_publish_cmd_result(cmd, true, NULL);
         reboot_for("mqtt command");
     } else {
-        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, ota, ota.check, reboot");
+        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, ota, ota.check, wifi, wifi.forget, reboot");
     }
     cJSON_Delete(root);
 }

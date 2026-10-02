@@ -265,6 +265,8 @@ mosquitto_pub -h <broker> -u … -P … -t downlink/downlink/cmd -m '{"cmd":"url
 | `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS; the master for music and announcements |
 | `{"cmd":"announce","id":"…","url":"https://…"}` | play a clip over the music; see [Announcements](#announcements) |
 | `{"cmd":"ota"}`, `{"cmd":"ota.check"}` | install or check for a release; see [Updates](#updates-ota) |
+| `{"cmd":"wifi"}` | list saved networks (never passwords) and the connected one |
+| `{"cmd":"wifi.forget","ssid":"…"}` | remove a saved network; removing the last one needs `"force":true`, since the board then needs its portal to get back online. The current connection lasts until it drops or the board reboots |
 | `{"cmd":"reboot"}` | reboot after replying |
 
 Status is also published when the state changes or a new stream error
