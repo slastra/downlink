@@ -28,9 +28,9 @@ support can come later from `esphome/micro-mp3`, chosen by `Content-Type`.
 |---|---|---|
 | `VIN` | `5V` | The board's LDOs take 3.3–5 V. 5 V gives the analog rail headroom. |
 | `GND` | `GND` | |
-| `BCK` | **GPIO4** | bit clock, 64 fs (3.072 MHz at 48 kHz) |
-| `LCK` / `LRCK` | **GPIO5** | word select, 48 kHz |
-| `DIN` | **GPIO6** | serial data |
+| `BCK` | **GPIO12** | bit clock, 64 fs (3.072 MHz at 48 kHz) |
+| `DIN` | **GPIO13** | serial data |
+| `LCK` / `LRCK` | **GPIO14** | word select, 48 kHz |
 | `SCK` | `GND` | No MCLK. The DAC's PLL runs off BCK. |
 | `FMT` | `GND` | I2S (Philips) format |
 | `XSMT` | `3V3` | soft-mute off (high = play) |

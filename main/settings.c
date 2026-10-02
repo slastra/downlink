@@ -18,7 +18,17 @@ void settings_load(void)
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     size_t n = sizeof s_id;
-    if (nvs_get_str(h, "id", s_id, &n) != ESP_OK) strlcpy(s_id, CONFIG_DL_DEVICE_ID, sizeof s_id);
+    if (nvs_get_str(h, "id", s_id, &n) != ESP_OK) {
+        /* Seed once, unless it's the default: a board flashed over USB with
+         * its own id must keep it when a public release image (built with
+         * the default) arrives over the air. */
+        strlcpy(s_id, CONFIG_DL_DEVICE_ID, sizeof s_id);
+        if (strcmp(s_id, "downlink")) {
+            nvs_set_str(h, "id", s_id);
+            nvs_commit(h);
+            ESP_LOGI(TAG, "seeded device id from build config");
+        }
+    }
     n = sizeof s_url;
     if (nvs_get_str(h, "url", s_url, &n) != ESP_OK) {
         /* Seed once. The placeholder is not worth persisting: a board built

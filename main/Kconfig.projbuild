@@ -27,17 +27,17 @@ menu "I2S (PCM5102A)"
 
 config DL_I2S_BCK_GPIO
     int "BCK GPIO"
-    default 4
+    default 12
     range 0 48
 
 config DL_I2S_WS_GPIO
     int "LRCK / WS GPIO"
-    default 5
+    default 14
     range 0 48
 
 config DL_I2S_DOUT_GPIO
     int "DIN (data out) GPIO"
-    default 6
+    default 13
     range 0 48
 
 endmenu
