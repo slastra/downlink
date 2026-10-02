@@ -1,0 +1,71 @@
+#!/usr/bin/env -S uv run --quiet --script
+"""
+decode-crash -- turn a board's status "crash" into source lines.
+
+  ./tools/decode-crash '<the "crash" object from the status, as JSON>' --board n16r8
+  ./tools/decode-crash --fw v0.1.1 --board supermini "0x42010900 0x420193e9"
+
+The firmware version and backtrace come from the crash JSON (or the
+arguments). The matching ELF is taken from dist/<fw>/ or downloaded from
+that GitHub release. Needs IDF's export.sh (for xtensa-esp32s3-elf-addr2line).
+A dev build (fw like "be4c7fe") has no release: pass --elf build/downlink.elf
+from the same tree.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+REPO = "slastra/downlink"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("crash", nargs="?", help='the status "crash" object as JSON, or a backtrace string')
+    ap.add_argument("--board", required=True, choices=["n16r8", "supermini"])
+    ap.add_argument("--fw", help="firmware version (default: from the crash JSON)")
+    ap.add_argument("--elf", type=Path, help="use this ELF instead of the release's")
+    args = ap.parse_args()
+
+    text = args.crash or sys.stdin.read()
+    fw, backtrace = args.fw, text
+    try:
+        c = json.loads(text)
+        c = c.get("crash", c)
+        fw = fw or c.get("fw")
+        backtrace = c.get("backtrace", "")
+        print(f"{c.get('reason')} in task {c.get('task')} (core {c.get('core')}), "
+              f"{c.get('uptimeS')} s after boot, fw {c.get('fw')}" + (f"\nwatchdog: {c['wdt']}" if c.get("wdt") else ""))
+    except json.JSONDecodeError:
+        pass
+    pcs = re.findall(r"0x[0-9a-fA-F]{8}", backtrace)
+    if not pcs:
+        sys.exit("no addresses in the backtrace")
+
+    elf = args.elf
+    if not elf:
+        if not fw:
+            sys.exit("which firmware? pass --fw (or the crash JSON, which has it)")
+        elf = ROOT / "dist" / fw / f"downlink-{args.board}-{fw}.elf"
+        if not elf.exists():
+            url = f"https://github.com/{REPO}/releases/download/{fw}/{elf.name}"
+            print(f"fetching {url}", file=sys.stderr)
+            elf.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                urllib.request.urlretrieve(url, elf)
+            except Exception as e:
+                sys.exit(f"no ELF for {fw} ({e}); a dev build needs --elf")
+    r = subprocess.run(["xtensa-esp32s3-elf-addr2line", "-pfiaC", "-e", str(elf), *pcs], text=True,
+                       capture_output=True)
+    if r.returncode:
+        sys.exit(r.stderr or "addr2line failed; run IDF's export.sh first")
+    print(r.stdout.replace(str(ROOT) + "/", ""), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

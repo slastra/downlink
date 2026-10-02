@@ -33,6 +33,7 @@
 #include "nvs_flash.h"
 
 #include "announce.h"
+#include "crash.h"
 #include "led.h"
 #include "netlink.h"
 #include "player.h"
@@ -138,6 +139,7 @@ static void publish_health(int st)
     cJSON_AddStringToObject(o, "url", ss.url);
     cJSON_AddStringToObject(o, "board", CONFIG_DL_BOARD);
     if (s_last_reboot[0]) cJSON_AddStringToObject(o, "rebootCause", s_last_reboot);
+    crash_add_json(o);
 
     announce_stats_t as;
     announce_get_stats(&as);
@@ -530,6 +532,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
     take_reboot_cause();
+    crash_init();
     updater_init(CONFIG_DL_BOARD, on_ota_event);
     updater_boot_audit();
     settings_load();

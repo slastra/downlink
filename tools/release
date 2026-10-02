@@ -13,7 +13,9 @@ Boards check https://github.com/slastra/downlink/releases/latest/download/manife
   3. checks each image reports the tag as its version, and scans it for
      every value in sdkconfig.defaults.local: any hit aborts and deletes
      the tag;
-  4. writes dist/<tag>/ with downlink-<board>-<tag>.bin and manifest.json;
+  4. writes dist/<tag>/ with downlink-<board>-<tag>.bin, the matching .elf
+     (to decode a field crash's backtrace: tools/decode-crash) and
+     manifest.json;
   5. with --publish, pushes the tag and creates the GitHub release (which
      becomes "latest", so every board sees it on its next check).
      Without it, prints those commands.
@@ -117,6 +119,7 @@ def main() -> int:
             abort(f"{board} build failed:\n" + "\n".join(r.stdout.splitlines()[-20:]) + r.stderr[-2000:])
 
         image = (bdir / "downlink.bin").read_bytes()
+        elf = (bdir / "downlink.elf").read_bytes()
         version, project = app_desc(image)
         if version != tag or project != "downlink":
             abort(f"{board} image reports {project} {version!r}, expected downlink {tag!r}")
@@ -124,11 +127,12 @@ def main() -> int:
         if f'CONFIG_DL_BOARD="{board}"' not in cfg:
             abort(f"{board} image was built with another CONFIG_DL_BOARD")
         for key, value in secret.items():
-            if value.encode() in image or f'{key}="{value}"' in cfg:
+            if value.encode() in image or value.encode() in elf or f'{key}="{value}"' in cfg:
                 abort(f"{board} image contains the value of {key} from sdkconfig.defaults.local; not publishing")
 
         name = f"downlink-{board}-{tag}.bin"
         (dist / name).write_bytes(image)
+        (dist / name.replace(".bin", ".elf")).write_bytes(elf)
         manifest["boards"][board] = {
             "url": f"https://github.com/{REPO}/releases/download/{tag}/{name}",
             "sha256": hashlib.sha256(image).hexdigest(),

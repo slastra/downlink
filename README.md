@@ -289,6 +289,7 @@ What to watch:
 | `state` | same as the LED: `portal`, `portal_client`, `no_wifi`, `wrong_codec`, `connecting`, `buffering`, `playing` |
 | `stream.lastError` | present only when not streaming: `HTTP 404`, `connect failed: …`, `stalled: …`, `stream is Ogg Vorbis, not Opus` |
 | `reset` / `rebootCause` | why the last boot happened; `panic`, `task_wdt` and `brownout` are the ones to worry about; `ota` and `ota unconfirmed` are updates |
+| `crash` | present after a crash: why, in which task, and a backtrace; see [Crashes](#crashes) |
 | `fw` / `ota.available` | running version, and a newer release when there is one |
 | `player.bufferMs` | audio buffered; sits near `drift.targetMs` (absent while a boundary is in the ring) |
 | `audio.blockAvgUs` / `blockMaxUs` | CPU per 10 ms output block (decode and mix), average and the worst of the last 30 s; ~1–2 ms is normal, ~6 ms during a catch-up, and the DMA covers up to ~80 ms |
@@ -444,6 +445,34 @@ release becomes "latest" at once; boards see it on their next check and
 install on command. Boards compare versions by equality, so rolling back
 means releasing again (a revert, as a new version).
 
+### Crashes
+
+A crash on a board nobody can plug into would otherwise show only
+`"reset":"panic"`. IDF's panic handler is wrapped (`main/crash.c`,
+`-Wl,--wrap=esp_panic_handler`) to save the essentials in RTC memory, which
+survives the reset (not a power cut), and the next boot reports them:
+
+```json
+"crash": {"fw":"v0.1.1","reason":"StoreProhibited","task":"mqtt_task","core":0,"uptimeS":80,
+          "backtrace":"0x42010900 0x420193e9 0x420d2873 0x420199dd 0x4201a959"}
+```
+
+`reason` is the CPU exception, `abort() was called at PC …`, or
+`task watchdog`, which adds `"wdt"`: the tasks that starved and what was
+running on each core. Every release publishes each board's `.elf` beside its
+`.bin`, so a backtrace decodes to source lines:
+
+```sh
+. ~/Projects/Esp/esp-idf-v6.1/export.sh
+./tools/decode-crash '<the "crash" object>' --board n16r8
+# StoreProhibited in task mqtt_task (core 0), 80 s after boot, fw v0.1.1
+# 0x42010900: on_cmd at main/main.c:370
+# 0x420193e9: on_mqtt_event at components/uplink/uplink.c:276
+```
+
+A dev build has no release: pass `--elf build/downlink.elf` from the same
+tree.
+
 ### Status LED
 
 The onboard WS2812 (GPIO48 on both boards) shows the first state that
@@ -480,6 +509,7 @@ The last three lines are a heartbeat every 30 s.
 | Path | |
 |---|---|
 | `main/main.c` | startup, LED state, MQTT status and commands, the supervisor |
+| `main/crash.c` | records why a crash happened, for the next boot's status |
 | `main/stream.c` | HTTP client task, redirects, ICY demux, ring writer, boundaries, `lastError` |
 | `main/ogg_sniff.c` | Ogg page walker: BOS offsets, codec check, OpusTags, sequence renumbering |
 | `main/player.cpp` | music source (ring → `micro_opus::OggOpusDecoder` → depth control) and the 10 ms output loop |
@@ -496,6 +526,7 @@ The last three lines are a heartbeat every 30 s.
 | `test/host` | host tests: `make -C test/host` |
 | `tools/fake-icecast` | bench Icecast stand-in: burst, real-time pacing, forced drops |
 | `tools/release` | builds, checks and publishes a release |
+| `tools/decode-crash` | turns a status `crash` backtrace into source lines |
 
 ## Not yet
 
