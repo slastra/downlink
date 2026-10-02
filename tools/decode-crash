@@ -63,7 +63,7 @@ def main() -> int:
                        capture_output=True)
     if r.returncode:
         sys.exit(r.stderr or "addr2line failed; run IDF's export.sh first")
-    print(r.stdout.replace(str(ROOT) + "/", ""), end="")
+    print(r.stdout.replace(str(ROOT) + "/", "").replace("/IDF_PROJECT/", ""), end="")
     return 0
 
 

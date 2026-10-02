@@ -106,7 +106,15 @@ def main() -> int:
     dist.mkdir(parents=True)
     manifest = {"version": tag, "boards": {}}
 
+    # Reproducible build: debug info names /IDF, /IDF_PROJECT, /TOOLCHAIN
+    # instead of this machine's paths, so the published ELFs don't carry a
+    # home directory (or a username that doubles as a credential).
+    repro = ROOT / "build-release" / "release.defaults"
+    repro.parent.mkdir(parents=True, exist_ok=True)
+    repro.write_text("CONFIG_APP_REPRODUCIBLE_BUILD=y\n")
+
     for board, defaults in BOARDS.items():
+        defaults = f"{defaults};{repro}"
         bdir = ROOT / "build-release" / board
         if bdir.exists():
             shutil.rmtree(bdir)
