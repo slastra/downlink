@@ -25,3 +25,7 @@ CONFIG_DL_LED_ORDER_RGB=y
 CONFIG_DL_LED_ORDER_GRB=n
 
 CONFIG_DL_BOARD="supermini"
+
+# Announcements: 2 MB PSRAM also holds the 512 KB ring and the Opus
+# pseudostack; ~1.35 MB is free while playing.
+CONFIG_DL_ANNOUNCE_BUDGET_KB=768

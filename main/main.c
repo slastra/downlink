@@ -12,8 +12,8 @@
  *
  * Remotely, the board reports health on MQTT (retained status every 30 s
  * and on every state change) and takes commands: status, url, volume,
- * reboot. See README "Remote management". A supervisor here reboots it,
- * with the reason recorded, if it wedges.
+ * announce, reboot. See README "Remote management" and "Announcements". A
+ * supervisor here reboots it, with the reason recorded, if it wedges.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -29,6 +29,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "announce.h"
 #include "led.h"
 #include "netlink.h"
 #include "player.h"
@@ -67,13 +68,21 @@ static int current_status(void)
     return player_state() == PLAYER_PLAYING ? ST_PLAYING : ST_BUFFERING;
 }
 
+/* The LED's own order: an announcement shows above the stream states (it
+ * plays whether or not there is music), below the portal and WiFi. The
+ * published `state` stays the stream's: linkify reads it as a closed set. */
+#define LED_ST_ANNOUNCING 100
+
 static int update_led(void)
 {
     static int shown = -1;
     int st = current_status();
-    if (st == shown) return st;
-    shown = st;
-    switch (st) {
+    int led = st;
+    if (st != ST_PORTAL_CLIENT && st != ST_PORTAL && st != ST_NO_WIFI && announce_sounding()) led = LED_ST_ANNOUNCING;
+    if (led == shown) return st;
+    shown = led;
+    switch (led) {
+    case LED_ST_ANNOUNCING: LED_ANNOUNCING();      break;
     case ST_PORTAL_CLIENT: LED_PROVISION_CLIENT(); break;
     case ST_PORTAL:        LED_PROVISION();        break;
     case ST_NO_WIFI:       LED_NO_WIFI();          break;
@@ -111,6 +120,14 @@ static void publish_health(int st)
     cJSON_AddStringToObject(o, "board", CONFIG_DL_BOARD);
     if (s_last_reboot[0]) cJSON_AddStringToObject(o, "rebootCause", s_last_reboot);
 
+    announce_stats_t as;
+    announce_get_stats(&as);
+    if (as.playing_id[0]) cJSON_AddStringToObject(o, "announcing", as.playing_id);
+    cJSON *an = cJSON_AddObjectToObject(o, "announce");
+    cJSON_AddNumberToObject(an, "played", as.played);
+    cJSON_AddNumberToObject(an, "failed", as.failed);
+    cJSON_AddNumberToObject(an, "queued", as.queued);
+
     cJSON *j = cJSON_AddObjectToObject(o, "stream");
     cJSON_AddBoolToObject(j, "connected", ss.connected);
     cJSON_AddNumberToObject(j, "kbps", ss.kbps);
@@ -131,6 +148,7 @@ static void publish_health(int st)
     cJSON *aj = cJSON_AddObjectToObject(o, "audio");
     cJSON_AddNumberToObject(aj, "blockMaxUs", ps.block_max_us);
     cJSON_AddNumberToObject(aj, "blockAvgUs", ps.block_avg_us);
+    cJSON_AddNumberToObject(aj, "clipAvgUs", announce_clip_avg_us());
     cJSON *dj = cJSON_AddObjectToObject(j, "drift");
     cJSON_AddStringToObject(dj, "mode", ps.drift_mode == 2 ? "catching_up" : ps.drift_mode > 0 ? "dropping"
                                         : ps.drift_mode < 0 ? "repeating" : "idle");
@@ -143,7 +161,7 @@ static void publish_health(int st)
     /* Stack headroom (bytes never touched) per task: a number that trends
      * toward zero is a crash that has not happened yet. */
     j = cJSON_AddObjectToObject(o, "stackFree");
-    static const char *const TASKS[] = { "main", "stream", "player", "mqtt_pub", "mqtt_task", "wifi_join" };
+    static const char *const TASKS[] = { "main", "stream", "player", "fetch", "mqtt_pub", "mqtt_task", "wifi_join" };
     for (size_t i = 0; i < sizeof TASKS / sizeof *TASKS; i++) {
         TaskHandle_t h = xTaskGetHandle(TASKS[i]);
         if (h) cJSON_AddNumberToObject(j, TASKS[i], uxTaskGetStackHighWaterMark(h));
@@ -158,10 +176,55 @@ static void publish_health(int st)
     cJSON_AddNumberToObject(j, "drops", ni.drops);
     cJSON_AddNumberToObject(j, "roams", ni.roams);
 
+    /* Clips live in PSRAM: the largest free block shows fragmentation. */
+    cJSON_AddNumberToObject(o, "psramLargest", (double)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
     uplink_publish_status(o);
 }
 
 static void reboot_for(const char *why);
+
+static void announce_reject(const char *id, const char *why)
+{
+    if (!id || !id[0]) {
+        uplink_publish_cmd_result("announce", false, why);
+        return;
+    }
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "id", id);
+    cJSON_AddStringToObject(d, "error", why);
+    uplink_publish_cmd_result_json("announce", false, d);
+}
+
+/* {"cmd":"announce","id","url","volume"?,"duck"?} -- the contract with
+ * linkify (README "Announcements"). Accepted means queued; the clip's own
+ * progress follows on downlink/<id>/announce. */
+static void on_announce(const cJSON *root)
+{
+    const cJSON *jid = cJSON_GetObjectItem(root, "id");
+    const cJSON *jurl = cJSON_GetObjectItem(root, "url");
+    const cJSON *jvol = cJSON_GetObjectItem(root, "volume");
+    const cJSON *jduck = cJSON_GetObjectItem(root, "duck");
+    const char *id = cJSON_IsString(jid) ? jid->valuestring : "";
+    const char *url = cJSON_IsString(jurl) ? jurl->valuestring : "";
+
+    if (!id[0])                    { announce_reject(NULL, "missing id"); return; }
+    if (strlen(id) > 32)           { announce_reject(NULL, "id longer than 32 characters"); return; }
+    if ((strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) || strlen(url) >= 512) {
+        announce_reject(id, "bad url");
+        return;
+    }
+    int volume = cJSON_IsNumber(jvol) ? (int)jvol->valuedouble : 100;   /* unity: chosen by ear over -14 dB ducked music */
+    int duck = cJSON_IsNumber(jduck) ? (int)jduck->valuedouble : -14;   /* both clamped by the queue */
+    int pos = announce_enqueue(id, url, volume, duck);
+    if (!pos) { announce_reject(id, "queue full"); return; }
+
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "id", id);
+    cJSON_AddNumberToObject(d, "queued", pos);
+    uplink_publish_cmd_result_json("announce", true, d);
+    s_publish_now = true;   /* the status's announce.queued */
+}
 
 /* On the esp-mqtt event task: quick work only. */
 static void on_cmd(cJSON *root)
@@ -199,13 +262,28 @@ static void on_cmd(cJSON *root)
             uplink_publish_cmd_result_json(cmd, true, d);
             s_publish_now = true;
         }
+    } else if (!strcmp(cmd, "announce")) {
+        on_announce(root);
     } else if (!strcmp(cmd, "reboot")) {
         uplink_publish_cmd_result(cmd, true, NULL);
         reboot_for("mqtt command");
     } else {
-        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, reboot");
+        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, reboot");
     }
     cJSON_Delete(root);
+}
+
+/* downlink/<id>/announce: {"id","state","durationMs"?,"error"?} */
+static void publish_announce_event(const announce_event_t *e)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "id", e->id);
+    cJSON_AddStringToObject(o, "state", announce_state_name(e->state));
+    if (e->state == ANN_PLAYING) cJSON_AddNumberToObject(o, "durationMs", e->duration_ms);
+    if (e->state == ANN_FAILED) cJSON_AddStringToObject(o, "error", e->error);
+    ESP_LOGI(TAG, "announce %s: %s%s%s", e->id, announce_state_name(e->state),
+             e->error[0] ? " " : "", e->error);
+    uplink_publish_event("announce", o);
 }
 
 static void on_mqtt_up(void) { s_publish_now = true; }
@@ -313,6 +391,7 @@ void app_main(void)
     ESP_LOGI(TAG, "downlink %s -> %s", settings_id(), settings_url());
 
     stream_start(settings_url());
+    announce_init();
     player_start(settings_volume());
 
     netlink_callbacks_t ncb = { .on_up = on_net_up, .on_down = on_net_down };
@@ -329,30 +408,39 @@ void app_main(void)
     char line[200];
     int last_st = -1;
     uint32_t last_err_seq = 0;
-    int64_t last_pub_us = 0;
-    for (int tick = 1;; tick++) {
-        vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+    char last_announcing[33] = "";
+    int64_t last_pub_us = 0, last_1s_us = 0, last_hb_us = esp_timer_get_time();
+    for (;;) {
+        /* Wake for an announcement event (published at once) or the tick. */
+        announce_event_t ev;
+        if (announce_wait_event(&ev, pdMS_TO_TICKS(TICK_MS))) publish_announce_event(&ev);
         int st = update_led();
 
-        /* Health: on every state change or new stream error (at most once a
-         * second), on request, and every heartbeat regardless. */
+        /* Health: on every state change, new stream error or announcement
+         * starting or ending (at most once a second), on request, and every
+         * heartbeat regardless. */
         int64_t now = esp_timer_get_time();
         uint32_t err_seq = stream_error_seq();
-        bool changed = st != last_st || err_seq != last_err_seq;
+        announce_stats_t as;
+        announce_get_stats(&as);
+        bool changed = st != last_st || err_seq != last_err_seq || strcmp(as.playing_id, last_announcing);
         bool due = s_publish_now || now - last_pub_us >= (int64_t)HEARTBEAT_S * 1000000
                 || (changed && now - last_pub_us >= 1000000);
         if (due && uplink_is_up()) {
             s_publish_now = false;
             last_st = st;
             last_err_seq = err_seq;
+            strlcpy(last_announcing, as.playing_id, sizeof last_announcing);
             last_pub_us = now;
             publish_health(st);
         }
 
-        if (tick % (1000 / TICK_MS)) continue;
+        if (now - last_1s_us < 1000000) continue;
+        last_1s_us = now;
         provision_poll();
         supervise();
-        if (tick % (HEARTBEAT_S * 1000 / TICK_MS)) continue;
+        if (now - last_hb_us < (int64_t)HEARTBEAT_S * 1000000) continue;
+        last_hb_us = now;
         netlink_status(line, sizeof line);
         ESP_LOGI(TAG, "%s", line);
         stream_status(line, sizeof line);
@@ -360,8 +448,11 @@ void app_main(void)
         uplink_status(line, sizeof line);
         ESP_LOGI(TAG, "%s", line);
         player_status(line, sizeof line);
-        ESP_LOGI(TAG, "%s heap=%uK psram=%uK", line,
+        ESP_LOGI(TAG, "%s heap=%uK psram=%uK/%uK", line,
                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+        ESP_LOGI(TAG, "announce played=%" PRIu32 " failed=%" PRIu32 " queued=%" PRIu32 "%s%s",
+                 as.played, as.failed, as.queued, as.playing_id[0] ? " playing=" : "", as.playing_id);
     }
 }

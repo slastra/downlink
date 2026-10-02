@@ -145,3 +145,14 @@ void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset)
         }
     }
 }
+
+bool opus_head_parse(const uint8_t *p, size_t n, uint16_t *preskip, uint8_t *channels)
+{
+    if (n < 27 || memcmp(p, "OggS", 4) != 0 || p[4] != 0 || !(p[5] & 0x02)) return false;
+    size_t body = 27 + (size_t)p[26];
+    if (n < body + 19 || memcmp(p + body, "OpusHead", 8) != 0) return false;
+    if ((p[body + 8] & 0xF0) != 0 || p[body + 9] == 0) return false;   /* major version 0, >= 1 channel */
+    *channels = p[body + 9];
+    *preskip = (uint16_t)(p[body + 10] | (p[body + 11] << 8));
+    return true;
+}

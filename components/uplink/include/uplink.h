@@ -8,6 +8,7 @@
  *   <root>/<id>/status      retained health; the will sets {"online":false}
  *   <root>/<id>/cmd         inbound JSON commands, {"cmd":"...", ...}
  *   <root>/<id>/cmd/result  one reply per command
+ *   <root>/<id>/<sub>       events (uplink_publish_event), not retained
  *
  * Nothing publishes from esp-mqtt's event task or blocks a caller on the
  * network: publishes go through a queue to one publisher task.
@@ -39,6 +40,10 @@ void uplink_publish_status(cJSON *o);
 void uplink_publish_cmd_result(const char *cmd, bool ok, const char *detail);
 /* Same, with a structured detail (ownership taken). */
 void uplink_publish_cmd_result_json(const char *cmd, bool ok, cJSON *detail);
+
+/* An event on <root>/<id>/<sub>: QoS 1, not retained. Takes ownership of
+ * `o` and adds a timestamp once the clock is synced. */
+void uplink_publish_event(const char *sub, cJSON *o);
 
 /* One line for the serial heartbeat. */
 void uplink_status(char *out, size_t len);

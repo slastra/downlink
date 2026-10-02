@@ -209,6 +209,14 @@ void uplink_publish_status(cJSON *o)
     publish_object(s_topic_status, o, 1, true);
 }
 
+void uplink_publish_event(const char *sub, cJSON *o)
+{
+    if (!s_enabled) { cJSON_Delete(o); return; }
+    char topic[TOPIC_MAX];
+    snprintf(topic, sizeof topic, "%s/%s/%s", CONFIG_UPLINK_TOPIC_ROOT, s_id, sub);
+    publish_object(topic, o, 1, false);
+}
+
 void uplink_publish_cmd_result_json(const char *cmd, bool ok, cJSON *detail)
 {
     if (!s_enabled) { cJSON_Delete(detail); return; }

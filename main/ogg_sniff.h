@@ -59,6 +59,14 @@ void ogg_sniff_reset(ogg_sniff_t *s);
  * page sequence bytes in p. */
 void ogg_sniff_feed(ogg_sniff_t *s, uint8_t *p, size_t n, uint64_t offset);
 
+/*
+ * Is this the start of an Ogg Opus file? A BOS page at p[0] whose first
+ * packet is OpusHead (RFC 7845 version 1). Fills the pre-skip (samples at
+ * 48 kHz to drop) and channel count. Downloaded clips must pass this before
+ * a byte reaches the decoder.
+ */
+bool opus_head_parse(const uint8_t *p, size_t n, uint16_t *preskip, uint8_t *channels);
+
 #ifdef __cplusplus
 }
 #endif

@@ -13,8 +13,8 @@ void audio_out_init(uint32_t sample_rate)
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     /* 8 x 480 frames = 80 ms of DMA at 48 kHz: enough slack for a WiFi
      * burst on the other core, short enough that volume changes land fast. */
-    cc.dma_desc_num = 8;
-    cc.dma_frame_num = 480;
+    cc.dma_desc_num = AUDIO_OUT_DMA_DESC;
+    cc.dma_frame_num = AUDIO_OUT_DMA_FRAMES_PER_DESC;
     /* An underrun plays silence instead of looping the last buffer. */
     cc.auto_clear = true;
     ESP_ERROR_CHECK(i2s_new_channel(&cc, &s_tx, NULL));

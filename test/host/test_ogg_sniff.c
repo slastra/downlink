@@ -174,6 +174,29 @@ int main(void)
         runs++;
     }
 
+    /* opus_head_parse: what a downloaded clip must start with. */
+    {
+        uint16_t pre; uint8_t ch;
+        uint8_t head19[19] = "OpusHead";
+        head19[8] = 1; head19[9] = 1; head19[10] = 0x38; head19[11] = 0x01;   /* v1, mono, pre-skip 312 */
+        len = 0;
+        page(0x02, 5, 0, head19, sizeof head19);
+        assert(opus_head_parse(stream, len, &pre, &ch) && pre == 312 && ch == 1);
+        assert(!opus_head_parse(stream, len - 1, &pre, &ch));            /* truncated header */
+        assert(!opus_head_parse((const uint8_t *)"garbage!!!", 10, &pre, &ch));
+        stream[5] = 0;                                                    /* not BOS */
+        assert(!opus_head_parse(stream, len, &pre, &ch));
+        stream[5] = 0x02;
+        uint8_t junk[64 + sizeof stream];
+        memcpy(junk, "x", 1); memcpy(junk + 1, stream, len);             /* page not at offset 0 */
+        assert(!opus_head_parse(junk, len + 1, &pre, &ch));
+        len = 0;
+        uint8_t vh[30] = "\x01vorbis";
+        page(0x02, 6, 0, vh, sizeof vh);                                  /* Vorbis */
+        assert(!opus_head_parse(stream, len, &pre, &ch));
+        runs++;
+    }
+
     printf("ogg_sniff: %d runs passed\n", runs);
     return 0;
 }

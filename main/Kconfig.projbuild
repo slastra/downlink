@@ -90,6 +90,46 @@ config DL_BUFFER_MAX_MS
         at DL_BUFFER_MS. Joining an Icecast mount during a silent passage
         can hand over minutes of audio in one byte-sized burst.
 
+menu "Announcements"
+
+config DL_ANNOUNCE_QUEUE
+    int "Announcements queued at once (fetching, ready and playing)"
+    default 4
+    range 1 16
+
+config DL_ANNOUNCE_MAX_KB
+    int "Largest clip (KB)"
+    default 512
+    range 16 4096
+    help
+        A larger clip fails with "too large". At 48 kbps, 512 KB is about
+        85 s. Must not exceed the budget below.
+
+config DL_ANNOUNCE_BUDGET_KB
+    int "PSRAM for queued clips (KB)"
+    default 2048
+    range 64 8192
+    help
+        All downloaded clips together. A fetch that would exceed it waits
+        for a clip ahead to finish. The SuperMini (2 MB PSRAM) uses 768.
+
+config DL_DUCK_ATTACK_MS
+    int "Duck: music down over (ms)"
+    default 300
+    range 10 5000
+
+config DL_DUCK_TAIL_MS
+    int "Duck: hold after the clip (ms)"
+    default 150
+    range 0 5000
+
+config DL_DUCK_RELEASE_MS
+    int "Duck: music back up over (ms)"
+    default 700
+    range 10 10000
+
+endmenu
+
 config DL_STALL_S
     int "Reconnect when no stream data for (s)"
     default 10

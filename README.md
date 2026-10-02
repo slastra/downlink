@@ -262,7 +262,8 @@ mosquitto_pub -h <broker> -u … -P … -t downlink/downlink/cmd -m '{"cmd":"url
 |---|---|
 | `{"cmd":"status"}` | publish status now |
 | `{"cmd":"url","url":"http://…"}` | switch streams now (reconnects), saved to NVS |
-| `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS |
+| `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS; the master for music and announcements |
+| `{"cmd":"announce","id":"…","url":"https://…"}` | play a clip over the music; see [Announcements](#announcements) |
 | `{"cmd":"reboot"}` | reboot after replying |
 
 Status is also published when the state changes or a new stream error
@@ -292,6 +293,65 @@ What to watch:
 | `player.underruns` | should stay flat; rising means the network can't keep up |
 | `player.drift` | `dropped`/`repeated` grow slowly in one direction for good (that's the clock difference being absorbed); `catchups` counts backlog jumps |
 | `heapMin`, `stackFree` | lowest free memory seen; a number trending toward zero is a crash that hasn't happened yet |
+| `announcing` | the id of the clip in progress, from the start of the duck to its last sample; absent otherwise |
+| `announce` | `played` and `failed` since boot, `queued` now |
+| `audio.clipAvgUs`, `psramLargest` | clip decode per block (~2–3 ms) and the largest free PSRAM block (clip chunks come from it) |
+
+### Announcements
+
+A short Ogg Opus clip played over the music, which ducks under it and comes
+back after. Built for scheduled and on-demand announcements sent from a
+server, but any HTTP(S) URL works.
+
+```json
+{"cmd":"announce","id":"a1","url":"https://host/clip.opus","volume":100,"duck":-14}
+```
+
+| Field | |
+|---|---|
+| `id` | required, 1–32 characters; unique per send, since events carry only the id |
+| `url` | required, `http://` or `https://`, under 512 characters; fetched on receipt, so short-lived signed URLs are fine |
+| `volume` | optional, default 100, clamped to 0–100; 0.5 dB per step, **relative to the music volume** (which is the master) |
+| `duck` | optional, default −14 dB, clamped to −40..0; how far the music drops |
+
+The reply on `cmd/result` is `{"id","queued":N}` (N = jobs ahead + 1), or
+`ok:false` with `missing id`, `id longer than 32 characters`, `bad url` or
+`queue full`. Progress follows on `downlink/<id>/announce` (QoS 1, not
+retained):
+
+```json
+{"id":"a1","state":"downloading"}
+{"id":"a1","state":"playing","durationMs":10300}
+{"id":"a1","state":"done"}
+{"id":"a1","state":"failed","error":"HTTP 403"}
+```
+
+`playing` and `done` are sent when the first and last samples actually
+leave the DAC. Errors: `too large`, `not Ogg Opus`, `HTTP <n>`,
+`connect failed: …`, `timeout` (10 s), `download failed`,
+`download incomplete`, `longer than its Content-Length`, `no memory`,
+`no audio`. A clip that fails never reaches the speaker.
+
+Behaviour:
+
+- **Fetch first, then duck.** Each clip is downloaded as soon as it's queued,
+  into 16 KB PSRAM chunks, and checked for an OpusHead page at byte 0. The
+  music then ducks over 300 ms and the clip starts once it's within 1 dB of
+  the target (~280 ms), so the first word lands on music that's already
+  down. After the clip: a 150 ms hold, then a 700 ms release.
+- **Back to back.** Clips play in the order received, and the music stays
+  ducked while the next one is already downloaded.
+- **No music needed.** Clips mix at the output stage, so they play over
+  silence when the stream is down or buffering, and a reconnect mid-clip
+  doesn't interrupt them.
+- **Limits.** `DL_ANNOUNCE_QUEUE` (4) jobs at once, counting downloading and
+  playing; clips up to `DL_ANNOUNCE_MAX_KB` (512 KB); clip memory
+  `DL_ANNOUNCE_BUDGET_KB`, 2 MB on the N16R8 and 768 KB on the SuperMini.
+  Send a `Content-Length`: without one the board must reserve the full
+  512 KB. Duck timing is `DL_DUCK_ATTACK_MS`/`TAIL_MS`/`RELEASE_MS`.
+- **Clips.** Ogg Opus at 48 kHz, mono preferred (stereo works), normalised
+  to about −16 LUFS / −1.5 dBTP; that's what volume 100 and duck −14 were
+  chosen against, by ear. The queue isn't persisted across a reboot.
 
 ### Status LED
 
@@ -302,6 +362,7 @@ applies. Brightness is `DL_LED_BRIGHTNESS` (15%).
 |---|---|
 | magenta pulse / solid | portal open / a phone is on it |
 | red | no WiFi |
+| white pulse | announcing |
 | slow red pulse | the mount isn't Opus (switch RUMP's codec) |
 | yellow pulse | WiFi up, stream not connected (retrying) |
 | blue | connected, buffering |
@@ -330,7 +391,8 @@ The last three lines are a heartbeat every 30 s.
 | `main/stream.c` | HTTP client task, redirects, ICY demux, ring writer, boundaries, `lastError` |
 | `main/ogg_sniff.c` | Ogg page walker: BOS offsets, codec check, OpusTags, sequence renumbering |
 | `main/player.cpp` | music source (ring → `micro_opus::OggOpusDecoder` → depth control) and the 10 ms output loop |
-| `main/mixer.c` | output-stage gain: per-sample volume ramps (plain C, host-tested) |
+| `main/announce.cpp` | announcements: job queue, fetch task, clip decoder, duck and events |
+| `main/mixer.c` | output stage: volume ramps, the duck envelope, mixing (plain C, host-tested) |
 | `main/drift.c` | buffer-depth control: drift and catch-up (plain C, host-tested) |
 | `main/audio_out.c` | `i2s_std` setup for the PCM5102A |
 | `main/settings.c` | device id, stream URL, volume in NVS (`downlink` namespace) |

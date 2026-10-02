@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "micro_opus/ogg_opus_decoder.h"
 
+#include "announce.h"
 #include "audio_out.h"
 #include "drift.h"
 #include "mixer.h"
@@ -36,8 +37,10 @@ static const char *TAG = "player";
 #define STARVED_BLOCKS 10                        /* 100 ms with nothing to play is an underrun */
 #define VOLUME_RAMP   (50 * FRAMES_PER_MS)       /* a volume change glides over 50 ms */
 /* Decode-and-discard (catch-up, reconnect dedupe) may use this much of each
- * 10 ms block; the rest is the output path's. */
-#define DISCARD_BUDGET_US 8000
+ * 10 ms block; the rest is the output path's -- less while an announcement
+ * is decoding alongside. */
+#define DISCARD_BUDGET_US          8000
+#define DISCARD_BUDGET_ANNOUNCE_US 5000
 #define STATS_WINDOW_US   (30LL * 1000 * 1000)
 
 #define BUFFERING PLAYER_BUFFERING
@@ -378,23 +381,32 @@ static void player_task(void *arg)
     bool behind = false;
     int64_t window_start = esp_timer_get_time();
     uint32_t window_max = 0;
+    uint64_t written = 0;
 
     for (;;) {
         int64_t t0 = esp_timer_get_time();
 
-        size_t got = music_read(block, BLOCK, DISCARD_BUDGET_US, behind);
+        size_t got = music_read(block, BLOCK,
+                                announce_sounding() ? DISCARD_BUDGET_ANNOUNCE_US : DISCARD_BUDGET_US, behind);
         if (got < BLOCK) memset(block + got * 2, 0, (BLOCK - got) * 2 * sizeof(int16_t));
+
+        /* Duck the music under an announcement and get the clip's block,
+         * then one mix: master * (music + clip), clamped once. */
+        gain_ramp_t *ann_gain;
+        const int16_t *clip = announce_process(block, BLOCK, &ann_gain);
 
         int32_t v = s_volume_q15;
         if (v != master_set) {
             gain_ramp_set(&master, v, VOLUME_RAMP);
             master_set = v;
         }
-        gain_ramp_apply(&master, block, BLOCK);
+        mix_block(block, clip, BLOCK, ann_gain, &master);
 
         int64_t t1 = esp_timer_get_time();
         audio_out_write(block, BLOCK);
         int64_t t2 = esp_timer_get_time();
+        written += BLOCK;
+        announce_written(written);
 
         /* A write that did not wait means the DMA had room to spare: the
          * loop is running late, so the next block does no discarding. */

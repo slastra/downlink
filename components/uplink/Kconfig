@@ -26,7 +26,10 @@ config UPLINK_TOPIC_ROOT
 
 config UPLINK_QUEUE_DEPTH
     int "Outbound publish queue depth"
-    default 8
+    default 32
+    help
+        A burst of announcements is a reply, a "downloading" event and a
+        status each; 8 dropped events under four back-to-back announces.
 
 config UPLINK_WILL_DELAY_S
     int "Will delay (s)"
