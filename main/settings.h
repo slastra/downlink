@@ -11,8 +11,10 @@ void settings_load(void);
 const char *settings_id(void);
 const char *settings_url(void);
 int settings_volume(void);
+bool settings_muted(void);
 
 /* Persist. An empty string erases the key, falling back to the Kconfig seed. */
 bool settings_set_id(const char *id);
 bool settings_set_url(const char *url);
 bool settings_set_volume(int volume);
+bool settings_set_muted(bool muted);

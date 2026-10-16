@@ -52,6 +52,7 @@ static volatile player_state_t s_state = BUFFERING;
 static volatile int32_t  s_volume_q15;           /* set by player_set_volume, picked up per block */
 static volatile int      s_volume;
 static volatile bool     s_hold;                 /* player_set_hold: faded out */
+static volatile bool     s_mute;                 /* player_set_mute: music faded out, clips still play */
 static uint32_t s_underruns, s_resets, s_errors;
 /* Counters other tasks read are 32-bit, so a read never tears. */
 static volatile uint32_t s_played_s;             /* music seconds that reached the DAC */
@@ -378,6 +379,9 @@ static void player_task(void *arg)
     gain_ramp_t master;
     gain_ramp_init(&master, s_volume_q15);
     int32_t master_set = s_volume_q15;
+    gain_ramp_t music;                           /* the mute: music only, ahead of the duck */
+    gain_ramp_init(&music, s_mute ? 0 : MIXER_UNITY_Q15);
+    bool mute_set = s_mute;
 
     bool behind = false;
     int64_t window_start = esp_timer_get_time();
@@ -390,6 +394,11 @@ static void player_task(void *arg)
         size_t got = music_read(block, BLOCK,
                                 announce_sounding() ? DISCARD_BUDGET_ANNOUNCE_US : DISCARD_BUDGET_US, behind);
         if (got < BLOCK) memset(block + got * 2, 0, (BLOCK - got) * 2 * sizeof(int16_t));
+        if (s_mute != mute_set) {
+            mute_set = s_mute;
+            gain_ramp_set(&music, mute_set ? 0 : MIXER_UNITY_Q15, PLAYER_HOLD_FADE_MS * FRAMES_PER_MS);
+        }
+        gain_ramp_apply(&music, block, BLOCK);
 
         /* Duck the music under an announcement and get the clip's block,
          * then one mix: master * (music + clip), clamped once. */
@@ -440,6 +449,12 @@ extern "C" void player_set_hold(bool hold)
     s_hold = hold;
 }
 
+extern "C" void player_set_mute(bool mute)
+{
+    if (mute != s_mute) ESP_LOGI(TAG, "%s", mute ? "muting the music" : "unmuting the music");
+    s_mute = mute;
+}
+
 extern "C" void player_set_volume(int volume_percent)
 {
     if (volume_percent < 0) volume_percent = 0;
@@ -458,6 +473,7 @@ extern "C" void player_get_stats(player_stats_t *out)
     out->played_s = s_played_s;
     out->progress = s_progress;
     out->volume = s_volume;
+    out->muted = s_mute;
     out->depth_ms = s_depth_ms;
     out->drift_mode = s_drift.catching_up ? 2 : s_drift.mode;
     out->drift_dropped = s_drift.dropped;

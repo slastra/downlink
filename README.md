@@ -263,6 +263,7 @@ mosquitto_pub -h <broker> -u … -P … -t downlink/downlink/cmd -m '{"cmd":"url
 | `{"cmd":"status"}` | publish status now |
 | `{"cmd":"url","url":"http://…"}` | switch streams now (reconnects), saved to NVS |
 | `{"cmd":"volume","value":0-100}` | live (glides over 50 ms, no click), saved to NVS; the master for music and announcements |
+| `{"cmd":"mute","value":true\|false}` | fade the music out (or back in) over 0.5 s, saved to NVS; announcements still play, at the volume above. The stream stays connected, so unmuting is instant. Reported as `player.muted` |
 | `{"cmd":"announce","id":"…","url":"https://…"}` | play a clip over the music; see [Announcements](#announcements) |
 | `{"cmd":"ota"}`, `{"cmd":"ota.check"}` | install or check for a release; see [Updates](#updates-ota) |
 | `{"cmd":"wifi"}` | list saved networks (never passwords) and the connected one |
@@ -276,7 +277,7 @@ appears (at most once a second). A status looks like:
 {"state":"playing","title":"Artist - Title","url":"http://…/stream","board":"supermini",
  "rebootCause":"mqtt command",
  "stream":{"connected":true,"kbps":132,"ringKB":48,"ringPct":9,"connects":1,"drops":0,"http":200},
- "player":{"underruns":0,"resets":1,"errors":0,"playedS":40,"volume":70,"bufferMs":4010,
+ "player":{"underruns":0,"resets":1,"errors":0,"playedS":40,"volume":70,"muted":false,"bufferMs":4010,
            "drift":{"mode":"idle","targetMs":4000,"dropped":0,"repeated":0,"catchups":0,"skippedS":0}},
  "stackFree":{"main":3824,"stream":6048,"player":4668,"mqtt_pub":2708,"mqtt_task":4460,"wifi_join":2568},
  "wifi":{"ssid":"…","rssi":-51,"ip":"…","drops":0,"roams":0},
@@ -519,7 +520,7 @@ The last three lines are a heartbeat every 30 s.
 | `main/mixer.c` | output stage: volume ramps, the duck envelope, mixing (plain C, host-tested) |
 | `main/drift.c` | buffer-depth control: drift and catch-up (plain C, host-tested) |
 | `main/audio_out.c` | `i2s_std` setup for the PCM5102A |
-| `main/settings.c` | device id, stream URL, volume in NVS (`downlink` namespace) |
+| `main/settings.c` | device id, stream URL, volume and mute in NVS (`downlink` namespace) |
 | `components/netlink` | WiFi station with a credential table (from tspl-station) |
 | `components/provision` | captive portal (from tspl-station, plus a stream URL field) |
 | `components/uplink` | MQTT: retained status, will, commands (slimmed from tspl-station) |

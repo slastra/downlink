@@ -29,6 +29,11 @@ void player_set_volume(int volume_percent);
  * decoding, and silence beats a stutter. */
 #define PLAYER_HOLD_FADE_MS 500
 void player_set_hold(bool hold);
+/* Fade the music out (true) or back in (false) over PLAYER_HOLD_FADE_MS,
+ * leaving announcements audible: a board muted for the night still says
+ * "we're closed". Unlike the hold, a mute is the owner's choice and is
+ * reported in the status. Call before player_start to boot muted. */
+void player_set_mute(bool mute);
 
 typedef struct {
     player_state_t state;
@@ -36,6 +41,7 @@ typedef struct {
     uint32_t played_s;        /* seconds of music written to the DAC since boot */
     uint32_t progress;        /* frames played or deliberately discarded (wraps): the supervisor's pulse */
     int      volume;
+    bool     muted;
     int32_t  depth_ms;        /* audio buffered, -1 when not measurable right now */
     /* buffer-depth control (drift.h) */
     int      drift_mode;      /* 2 catching up, +1 dropping, -1 repeating, 0 idle */

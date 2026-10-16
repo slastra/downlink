@@ -12,6 +12,7 @@ static const char *TAG = "settings";
 static char s_id[32]   = CONFIG_DL_DEVICE_ID;
 static char s_url[256] = CONFIG_DL_STREAM_URL;
 static int  s_volume   = CONFIG_DL_VOLUME;
+static bool s_muted;
 
 void settings_load(void)
 {
@@ -42,12 +43,14 @@ void settings_load(void)
     }
     uint8_t v;
     if (nvs_get_u8(h, "vol", &v) == ESP_OK && v <= 100) s_volume = v;
+    if (nvs_get_u8(h, "mute", &v) == ESP_OK) s_muted = v != 0;
     nvs_close(h);
 }
 
 const char *settings_id(void)  { return s_id; }
 const char *settings_url(void) { return s_url; }
 int settings_volume(void)      { return s_volume; }
+bool settings_muted(void)      { return s_muted; }
 
 bool settings_set_volume(int volume)
 {
@@ -58,6 +61,17 @@ bool settings_set_volume(int volume)
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     if (err == ESP_OK) s_volume = volume;
+    return err == ESP_OK;
+}
+
+bool settings_set_muted(bool muted)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_u8(h, "mute", muted ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err == ESP_OK) s_muted = muted;
     return err == ESP_OK;
 }
 

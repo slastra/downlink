@@ -12,7 +12,7 @@
  *
  * Remotely, the board reports health on MQTT (retained status every 30 s
  * and on every state change) and takes commands: status, url, volume,
- * announce, ota, ota.check, reboot. See README "Remote management",
+ * mute, announce, ota, ota.check, reboot. See README "Remote management",
  * "Announcements" and "Updates". A supervisor here reboots it, with the
  * reason recorded, if it wedges, and rolls back an update that never
  * reached the broker.
@@ -165,6 +165,7 @@ static void publish_health(int st)
     cJSON_AddNumberToObject(j, "errors", ps.errors);
     cJSON_AddNumberToObject(j, "playedS", ps.played_s);
     cJSON_AddNumberToObject(j, "volume", ps.volume);
+    cJSON_AddBoolToObject(j, "muted", ps.muted);
     if (ps.depth_ms >= 0) cJSON_AddNumberToObject(j, "bufferMs", ps.depth_ms);
     cJSON *aj = cJSON_AddObjectToObject(o, "audio");
     cJSON_AddNumberToObject(aj, "blockMaxUs", ps.block_max_us);
@@ -398,6 +399,19 @@ static void on_cmd(cJSON *root)
             uplink_publish_cmd_result_json(cmd, true, d);
             s_publish_now = true;
         }
+    } else if (!strcmp(cmd, "mute")) {
+        const cJSON *v = cJSON_GetObjectItem(root, "value");
+        if (!cJSON_IsBool(v)) {
+            uplink_publish_cmd_result(cmd, false, "value must be true or false");
+        } else {
+            bool mute = cJSON_IsTrue(v);
+            player_set_mute(mute);
+            settings_set_muted(mute);
+            cJSON *d = cJSON_CreateObject();
+            cJSON_AddBoolToObject(d, "muted", mute);
+            uplink_publish_cmd_result_json(cmd, true, d);
+            s_publish_now = true;
+        }
     } else if (!strcmp(cmd, "announce")) {
         on_announce(root);
     } else if (!strcmp(cmd, "ota") || !strcmp(cmd, "ota.check")) {
@@ -410,7 +424,7 @@ static void on_cmd(cJSON *root)
         uplink_publish_cmd_result(cmd, true, NULL);
         reboot_for("mqtt command");
     } else {
-        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, announce, ota, ota.check, wifi, wifi.forget, reboot");
+        uplink_publish_cmd_result(cmd, false, "unknown command; try status, url, volume, mute, announce, ota, ota.check, wifi, wifi.forget, reboot");
     }
     cJSON_Delete(root);
 }
@@ -588,6 +602,7 @@ void app_main(void)
 
     stream_start(settings_url());
     announce_init();
+    player_set_mute(settings_muted());
     player_start(settings_volume());
 
     netlink_callbacks_t ncb = { .on_up = on_net_up, .on_down = on_net_down };
